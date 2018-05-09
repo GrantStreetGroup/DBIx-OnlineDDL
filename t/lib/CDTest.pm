@@ -5,6 +5,7 @@ use strict;
 use warnings;
 
 use CDTest::Schema;
+use Class::Load       qw< is_class_loaded >;
 use Env               qw< CDTEST_DSN CDTEST_MASS_POPULATE >;
 use Path::Class::File ();
 
@@ -96,8 +97,10 @@ sub init_schema {
         $schema = $schema->connect(@dbi_args);
 
         # Advertise the DBMS version
-        my $dbh = $schema->storage->dbh;
-        Test2::Tools::Basic::note $dbh->get_info(17)." version ".$dbh->get_info(18);  # SQL_DBMS_NAME+VER
+        if (is_class_loaded('Test2::Tools::Basic')) {
+            my $dbh = $schema->storage->dbh;
+            Test2::Tools::Basic::note($dbh->get_info(17)." version ".$dbh->get_info(18));  # SQL_DBMS_NAME+VER
+        }
     }
     else {
         return $schema
@@ -356,7 +359,9 @@ sub mass_populate_schema {
     $batches ||= 10;
 
     for (1 .. $batches) {
-        Test2::Tools::Basic::note "Mass populating data: $_,000 records";
+        if (is_class_loaded('Test2::Tools::Basic')) {
+            Test2::Tools::Basic::note("Mass populating data: $_,000 records");
+        }
 
         # Create 1000 fake artists
         my $artist_rows = [ [ qw/name/ ] ];
