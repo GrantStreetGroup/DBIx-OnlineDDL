@@ -161,6 +161,9 @@ Keep using it.
 A L<DBIx::Class::ResultSource>.  This will be the source used for all operations, DDL or
 otherwise.  Optional, but recommended for DBIC users.
 
+The DBIC storage handler's C<connect_info> will be tweaked to ensure sane defaults and
+proper post-connection details.
+
 =cut
 
 has rsrc => (
@@ -196,6 +199,8 @@ within the object.
 Required, except for DBIC users, who should be setting L</rsrc> above.  It is also
 assumed that the correct database is already active.
 
+The object will be tweaked to ensure sane defaults, proper post-connection details, and
+a custom C<retry_handler>.
 
 =cut
 
@@ -282,6 +287,22 @@ has progress_bar => (
     is       => 'rw',
     isa      => InstanceOf['Term::ProgressBar'],
 );
+
+sub _progress_bar_setup {
+    my $self = shift;
+    my $vars = $self->_vars;
+
+    my $steps = 6 + scalar keys %{ $self->coderef_hooks };
+
+    my $progress = $self->progress_bar || Term::ProgressBar->new({
+        name   => $self->progress_name,
+        count  => $steps,
+        ETA    => 'linear',
+        silent => !(-t *STDERR && -t *STDIN),  # STDERR is what {fh} is set to use
+    });
+
+    $vars->{progress_bar} = $progress;
+}
 
 =head3 progress_name
 
@@ -513,7 +534,9 @@ around BUILDARGS => sub {
 
 sub BUILD {
     my $self = shift;
-    my $dbh  = $self->dbh;
+    my $rsrc = $self->rsrc;
+
+    my $dbh = $self->dbh;
 
     # Get the current catalog/schema
     my $dbms_name = $self->_vars->{dbms_name} = $dbh->get_info( $GetInfoType{SQL_DBMS_NAME} );
@@ -538,6 +561,152 @@ sub BUILD {
 
     $self->_vars->{catalog} = $catalog;
     $self->_vars->{schema}  = $schema;
+
+    # Add in the post-connection details
+    my @stmts = $self->_post_connection_stmts;
+
+    if ($rsrc) {
+        ### DBIC Storage
+
+        my @post_connection_details = map { [ do_sql => $_ ] } @stmts;
+
+        # XXX: Tapping into a private attribute here, but it's a lot better than parsing
+        # $storage->connect_info.
+        my $on_connect_call = $rsrc->storage->_dbic_connect_attributes->{on_connect_call};
+
+        # Parse on_connect_call to make sure we can add to it
+        my $ref = defined $on_connect_call && ref $on_connect_call;
+        unless ($on_connect_call) {
+            $on_connect_call = \@post_connection_details;
+        }
+        elsif  (!$ref) {
+            $on_connect_call = [ [ do_sql => $on_connect_call ], @post_connection_details ];
+        }
+        elsif  ($ref eq 'ARRAY') {
+            # Double-check that we're not repeating ourselves by inspecting the array for
+            # our own statements.
+            @$on_connect_call = grep {
+                my $e = $_;
+                !(  # exclude any of ours
+                    $e && ref $e && ref $e eq 'ARRAY' && @$e == 2 &&
+                    $e->[0] && !ref $e->[0] && $e->[0] eq 'do_sql' &&
+                    $e->[1] && !ref $e->[1] && (any { $e->[1] eq $_ } @stmts)
+                );
+            } @$on_connect_call;
+
+            my $first_occ = $on_connect_call->[0];
+            if ($first_occ && ref $first_occ && ref $first_occ eq 'ARRAY') {
+                $on_connect_call = [ @$on_connect_call, @post_connection_details ];
+            }
+            else {
+                $on_connect_call = [ $on_connect_call, @post_connection_details ];
+            }
+        }
+        elsif  ($ref eq 'CODE') {
+            $on_connect_call = [ $on_connect_call, @post_connection_details ];
+        }
+        else {
+            die "Illegal reftype $ref for on_connect_call connection attribute!";
+        }
+
+        $rsrc->storage->_dbic_connect_attributes->{on_connect_call} = $on_connect_call;
+    }
+    else {
+        ### DBIx::Connector::Retry (via DBI Callbacks)
+
+        my $conn      = $self->dbi_connector;
+        my $dbi_attrs = $conn->connect_info->[3];
+
+        # Playing with refs, so no need to re-set connect_info
+        $conn->connect_info->[3] = $dbi_attrs = {} unless $dbi_attrs;
+
+        # Make sure the basic settings are sane
+        $dbi_attrs->{AutoCommit} = 1;
+        $dbi_attrs->{RaiseError} = 1;
+
+        # Add the DBI callback
+        my $callbacks  = $dbi_attrs->{Callbacks} //= {};
+        my $package_re = quotemeta(__PACKAGE__.'::_dbi_connected_callback');
+
+        my $ref = defined $callbacks->{connected} && ref $callbacks->{connected};
+        unless ($callbacks->{connected}) {
+            $callbacks->{connected} = set_subname '_dbi_connected_callback' => sub {
+                shift->do($_) for @stmts;
+                return;
+            };
+        }
+        elsif (!$ref || $ref ne 'CODE') {
+            die "Illegal reftype $ref for connected DBI Callback!";
+        }
+        elsif (subname($callbacks->{connected}) =~ /^$package_re/) {  # allow for *_wrapped below
+            # This is one of our callbacks; leave it alone!
+        }
+        else {
+            # This is somebody else's callback; wrap around it
+            my $old_coderef = $callbacks->{connected};
+            $callbacks->{connected} = set_subname '_dbi_connected_callback_wrapped' => sub {
+                my $h = shift;
+                $old_coderef->($h);
+                $h->do($_) for @stmts;
+                return;
+            };
+        }
+
+        # Add a proper retry_handler
+        $conn->retry_handler(sub { $self->_retry_handler(@_) });
+
+        # And max_attempts.  XXX: Maybe they actually wanted 10 and not just the default?
+        $conn->max_attempts(20) if $conn->max_attempts == 10;
+    }
+
+    # Go ahead and run the post-connection statements for this session
+    $dbh->{AutoCommit} = 1;
+    $dbh->{RaiseError} = 1;
+    $dbh->do($_) for @stmts;
+}
+
+sub _post_connection_stmts {
+    my $self = shift;
+    my @stmts;
+
+    my $dbms_name = $self->_vars->{dbms_name};
+
+    if    ($dbms_name eq 'MySQL') {
+        @stmts = (
+            # Use the right database, just in case it's not in the DSN.
+            "USE ".$self->dbh->quote_identifier($self->_vars->{schema}),
+
+            # Foreign key constraints should not interrupt the process.  Nor should they be
+            # checked when trying to add or remove them.  This would cause a simple FK DDL
+            # to turn into a long-running operation on pre-existing tables.
+            'SET SESSION foreign_key_checks=0',
+
+            # Wait timeout for activity.  This is the MySQL default.
+            'SET SESSION wait_timeout=28800',
+
+            # Wait 60 seconds for any locks, and retry with the retry_handler.  That'll give us
+            # 20 minutes to wait for locks.
+            'SET SESSION lock_wait_timeout=60',
+
+            # Only wait 2 seconds for InnoDB row lock wait timeouts, so that OnlineDDL is more
+            # likely to be the victim of lock contention.
+            'SET SESSION innodb_lock_wait_timeout=2',
+        );
+    }
+    elsif ($dbms_name eq 'SQLite') {
+        @stmts = (
+            # See FK comment in MySQL section.  FKs in SQLite are a per-connection enabled
+            # feature, so this is always a "session" command.
+            'PRAGMA foreign_keys = OFF',
+
+            # Only wait 1 second for file contentions.  The downside is that the default is
+            # actually 0, so other (non-OnlineDDL) connections should have a setting that is more
+            # than that.
+            'PRAGMA busy_timeout = 1000',
+        );
+    }
+
+    return @stmts;
 }
 
 =head1 CONSTRUCTORS
@@ -588,14 +757,15 @@ sub execute {
     my $self       = shift;
     my $undo_stack = $self->undo_stack;
 
-    $undo_stack->run_reversibly(sub {
-        $self->prework;
+    $self->_progress_bar_setup;
+
+    $undo_stack->run_reversibly(set_subname '_execute_part_one', sub {
         $self->create_new_table;
         $self->create_triggers;
         $self->copy_rows;
         $self->swap_tables;
     });
-    $undo_stack->run_reversibly(sub {
+    $undo_stack->run_reversibly(set_subname '_execute_part_two', sub {
         $self->drop_old_table;
         $self->cleanup_foreign_keys;
     });
@@ -775,53 +945,8 @@ sub dbh {
 =head1 STEP METHODS
 
 You can call these methods individually, but using L</construct_and_execute> instead is
-recommended.  If you do run these yourself, the exception will need to be caught and the
-L</undo_stack> should be ran to get the DB back to normal.
-
-=head2 prework
-
-Sets up some basic prework (like setting variables) prior to the new table creation.
-
-=cut
-
-sub prework {
-    my $self = shift;
-    my $dbh  = $self->dbh;
-    my $vars = $self->_vars;
-
-    my $steps = 7 + scalar keys %{ $self->coderef_hooks };
-
-    my $progress = $self->progress_bar || Term::ProgressBar->new({
-        name   => $self->progress_name,
-        count  => $steps,
-        ETA    => 'linear',
-        silent => !(-t *STDERR && -t *STDIN),  # STDERR is what {fh} is set to use
-    });
-
-    $vars->{progress_bar} = $progress;
-
-    $progress->message('Basic prework');
-
-    my $dbms_name = $vars->{dbms_name};
-
-    # Foreign key constraints should not interrupt the process.  Nor should they be
-    # checked when trying to add or remove them.  This would cause a simple FK DDL
-    # to turn into a long-running operation on pre-existing tables.
-
-    if    ($dbms_name eq 'MySQL') {
-        $dbh->do('SET SESSION foreign_key_checks=0');
-        $dbh->do('SET SESSION lock_wait_timeout=60');
-    }
-    elsif ($dbms_name eq 'SQLite') {
-        my ($fk_enabled) = $dbh->selectrow_array('PRAGMA foreign_keys');
-
-        # FKs in SQLite are a per-connection enabled feature, so this is always a
-        # "session" command.
-        $dbh->do('PRAGMA foreign_keys = OFF') if $fk_enabled;
-    }
-
-    $progress->update;
-}
+highly recommended.  If you do run these yourself, the exception will need to be caught
+and the L</undo_stack> should be ran to get the DB back to normal.
 
 =head2 create_new_table
 
