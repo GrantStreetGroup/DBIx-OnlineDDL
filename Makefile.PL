@@ -51,36 +51,44 @@ my %WriteMakefileArgs = (
     PREREQ_PM     => {
         # Start from "scan-perl-prereqs --pretty lib"
 
-        ### FIXME: Define prereqs for lib
-
-        #'Moo'                    => '2.00',  # sane minimum baseline
-        #'Types::Standard'        => '1.00',  # sane minimum baseline
-        #'Data::Float'            => 0,
-        #'List::Util'             => '1.33',  # has any/all/etc.
-        #'namespace::clean'       => 0,
+        DBI                    => '1.630',  # sane minimum baseline
+        'DBIx::BatchChunker'   => '0.92',   # stmt changes + dbi_connector
+        'Eval::Reversible'     => 0,
+        'List::Util'           => '1.40',  # has Sub::Util
+        Moo                    => '2.00',  # sane minimum baseline
+        'Term::ProgressBar'    => '2.14',  # with silent option
+        'Types::Standard'      => '1.00',  # sane minimum baseline
+        'namespace::clean'     => 0,
     },
     TEST_REQUIRES => {
         # Start from "scan-perl-prereqs --pretty t"
 
-        ### FIXME: Define prereqs for tests
+        'Test2::Bundle::More'     => 0,
+        'Test2::Tools::Compare'   => 0,
+        'Test2::Tools::Exception' => 0,
+        'Test2::Tools::Explain'   => 0,
+        'Scalar::Util'            => 0,
 
-        #'Test2::Bundle::More'     => 0,
-        #'Test2::Tools::Compare'   => 0,
-        #'Test2::Tools::Exception' => 0,
-        #'Test2::Tools::Explain'   => 0,
-        #'Scalar::Util'            => 0,
+        'Class::Load' => 0,
+        'DBIx::Class' => 0,
+        'Path::Class' => 0,
     },
 );
-
-### FIXME: Delete or add to no_index
 
 # Don't index examples/*
 $WriteMakefileArgs{META_MERGE}{no_index} = { directory => [qw< examples >] };
 
-### FIXME: Add special prereqs (like runtime->suggests) or leave alone
-
 # Other prereqs not in *_REQUIRES (https://metacpan.org/pod/CPAN::Meta::Spec#Prereq-Spec)
 $WriteMakefileArgs{META_MERGE}{prereqs} = {
+    runtime => {
+        suggests => {
+            # Even though we require it in the tests, this is still optional for the module
+            'DBIx::Class' => 0,
+
+            # This is only "required" if DBI processing is used
+            'DBIx::Connector::Retry' => 0,
+        },
+    },
     develop => {
         requires => {
             'perl'                          => '5.10.1',

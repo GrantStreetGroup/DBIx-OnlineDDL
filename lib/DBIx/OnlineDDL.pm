@@ -1768,6 +1768,8 @@ L<Facebook's OSC|https://www.facebook.com/notes/mysql-at-facebook/online-schema-
 
 L<MySQL's Online DDL|https://dev.mysql.com/doc/refman/5.6/en/innodb-online-ddl.html>
 
+=back
+
 =head1 WHY YET ANOTHER OSC?
 
 The biggest reason is that none of the above fully support foreign key constraints.
