@@ -243,10 +243,7 @@ onlineddl_test 'Add column' => sub {
                 my $qname = $dbh->quote_identifier($name);
                 my $qcol  = $dbh->quote_identifier('test_column');
 
-                $oddl->dbh_runner(run => sub {
-                    $dbh = $_;
-                    $dbh->do("ALTER TABLE $qname ADD COLUMN $qcol VARCHAR(100) NULL");
-                });
+                $oddl->dbh_runner_do("ALTER TABLE $qname ADD COLUMN $qcol VARCHAR(100) NULL");
             },
         },
 
@@ -298,17 +295,15 @@ onlineddl_test 'Add column + title change' => sub {
                 my $qcol  = $dbh->quote_identifier('test_column');
                 my $qidx  = $dbh->quote_identifier('track_cd_title');
 
-                $oddl->dbh_runner(run => sub {
-                    $dbh = $_;
-                    $dbh->do("ALTER TABLE $qname ADD COLUMN $qcol VARCHAR(100) NULL");
-                });
+                $oddl->dbh_runner_do(
+                    "ALTER TABLE $qname ADD COLUMN $qcol VARCHAR(100) NULL",
 
-                $oddl->dbh_runner(run => sub {
-                    $dbh = $_;
                     # SQLite can't DROP on an ALTER TABLE, but isn't bothered by the breaking of
                     # a unique index (for some reason)
-                    $dbh->do("ALTER TABLE $qname DROP INDEX $qidx") unless $dbms_name eq 'SQLite';
-                });
+                    ($dbms_name eq 'SQLite' ? () :
+                        "ALTER TABLE $qname DROP INDEX $qidx"
+                    )
+                );
             },
             before_swap => sub {
                 my $oddl = shift;
@@ -384,10 +379,7 @@ onlineddl_test 'Drop column' => sub {
                 my $qname = $dbh->quote_identifier($name);
                 my $qcol  = $dbh->quote_identifier('last_updated_at');
 
-                $oddl->dbh_runner(run => sub {
-                    $dbh = $_;
-                    $dbh->do("ALTER TABLE $qname DROP COLUMN $qcol");
-                });
+                $oddl->dbh_runner_do("ALTER TABLE $qname DROP COLUMN $qcol");
             },
         },
 
@@ -427,12 +419,11 @@ onlineddl_test 'Drop PK' => sub {
                 my $qname = $dbh->quote_identifier($name);
                 my $qcol  = $dbh->quote_identifier('trackid');
 
-                $oddl->dbh_runner(run => sub {
-                    $dbh = $_;
-                    $dbh->do("ALTER TABLE $qname DROP COLUMN $qcol");
-                });
+                $oddl->dbh_runner_do("ALTER TABLE $qname DROP COLUMN $qcol");
 
                 $oddl->dbh_runner(run => sub {
+                    $dbh = $_;
+
                     # Need to also drop the FK on lyrics
                     my $fk_hash = $oddl->_fk_info_to_hash( $dbh->foreign_key_info(
                         $oddl->_vars->{catalog}, $oddl->_vars->{schema}, $oddl->table_name,

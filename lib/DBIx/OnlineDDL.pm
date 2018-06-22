@@ -55,22 +55,20 @@ version 0.90
     );
 
     sub drop_foobar {
-        my $oddl = shift;
-        my $name = $oddl->new_table_name;
+        my $oddl  = shift;
+        my $name  = $oddl->new_table_name;
+        my $qname = $oddl->dbh->quote_identifier($name);
 
-        $oddl->dbh_runner(run => sub {
-            my $qname = $_->quote_identifier($name);
-
-            # Drop the 'foobar' column, since it is no longer used
-            $_->do("ALTER TABLE $qname DROP COLUMN foobar");
-        });
+        # Drop the 'foobar' column, since it is no longer used
+        $oddl->dbh_runner_do("ALTER TABLE $qname DROP COLUMN foobar");
     }
 
     sub delete_deprecated_accounts {
         my $oddl = shift;
         my $name = $oddl->new_table_name;
+        my $dbh  = $oddl->dbh;  # only use for quoting!
 
-        my $qname = $oddl->dbi_connector->dbh->quote_identifier($name);
+        my $qname = $dbh->quote_identifier($name);
 
         DBIx::BatchChunker->construct_and_execute(
             chunk_size  => 5000,
@@ -336,7 +334,7 @@ essentially a no-op.
 
 All of these triggers pass the C<DBIx::OnlineDDL> object as the only argument.  The
 L</new_table_name> can be acquired from that and used in SQL statements.  The L</dbh_runner>
-method should be used to protect against disconnections or locks.
+and L</dbh_runner_do> methods should be used to protect against disconnections or locks.
 
 There is room to add more hooks here, but only if there's a good reason to do so.
 (Running the wrong kind of SQL at the wrong time could be dangerous.)  Create an GitHub
@@ -746,7 +744,9 @@ sub construct_and_execute {
 
 =head1 METHODS
 
-=head2 execute
+=head2 Step Runners
+
+=head3 execute
 
 Runs all of the steps as documented in L</STEP METHODS>.  This also includes undo
 protection, in case of exceptions.
@@ -771,7 +771,7 @@ sub execute {
     });
 }
 
-=head2 fire_hook
+=head3 fire_hook
 
     $online_ddl->fire_hook('before_triggers');
 
@@ -799,11 +799,28 @@ sub fire_hook {
     $progress->update;
 }
 
-=head2 dbh_runner
+=head2 DBI Helpers
 
-    $online_ddl->dbh_runner(run => sub {
+=head3 dbh
+
+    $online_ddl->dbh;
+
+Acquires a database handle, either from L</rsrc> or L</dbi_connector>.  Not recommended
+for active work, as it doesn't offer retry protection.  Instead, use L</dbh_runner> or
+L</dbh_runner_do>.
+
+=cut
+
+sub dbh {
+    my $self = shift;
+    return $self->rsrc ? $self->rsrc->storage->dbh : $self->dbi_connector->dbh;
+}
+
+=head3 dbh_runner
+
+    my @items = $online_ddl->dbh_runner(run => sub {
         my $dbh = $_;  # or $_[0]
-        $dbh->do(...);
+        $dbh->selectall_array(...);
     });
 
 Runs the C<$coderef>, locally setting C<$_> to and passing in the database handle.  This
@@ -928,18 +945,36 @@ sub dbh_runner {
     return $wantarray ? @res : $res[0];
 }
 
-=head2 dbh
+=head3 dbh_runner_do
 
-    $online_ddl->dbh;
+    $online_ddl->dbh_runner_do(
+        "ALTER TABLE $table_name ADD COLUMN foobar",
+        ["ALTER TABLE ? DROP COLUMN ?", undef, $table_name, 'baz'],
+    );
 
-Acquires a database handle, either from L</rsrc> or L</dbi_connector>.  Not recommended
-for active work, as it doesn't offer retry protection.  Instead, use L</dbh_runner>.
+Runs a list of commands, encapulating each of them in a L</dbh_runner> coderef with calls
+to L<DBI/do>.  This is handy when you want to run a list of DDL commands, which you don't
+care about the output of, but don't want to bundle it into a single non-idempotant
+repeatable coderef.  Or if you want to save typing on a single do-able SQL command.
+
+The items can either be a SQL string or an arrayref of options to pass to L<DBI/do>.
+
+The statement is assumed to be non-transactional.  If you want to run a DB transaction,
+you should use L</dbh_runner> instead.
 
 =cut
 
-sub dbh {
-    my $self = shift;
-    return $self->rsrc ? $self->rsrc->storage->dbh : $self->dbi_connector->dbh;
+sub dbh_runner_do {
+    my ($self, @commands) = @_;
+
+    foreach my $command (@commands) {
+        my $ref = ref $command;
+        die "$ref references not valid in dbh_runner_do" if $ref && $ref ne 'ARRAY';
+
+        $self->dbh_runner(run => set_subname '_dbh_runner_do', sub {
+            $_->do( $ref ? @$command : $command );
+        });
+    }
 }
 
 =head1 STEP METHODS
@@ -1031,18 +1066,11 @@ sub create_new_table {
     $table_sql =~ s/(?<=^CREATE TABLE )$orig_table_name_quote_re/$new_table_name_quote/;
 
     # Actually create the table
-    $self->dbh_runner(run => set_subname '_create_table_do', sub {
-        $dbh = $_;
-        $dbh->do($table_sql);
-    });
+    $self->dbh_runner_do($table_sql);
 
     # Undo commands, including a failure warning update
     $undo_stack->failure_warning("\nDropping the new table and rolling back to start!\n\n");
-    $undo_stack->add_undo(sub {
-        $self->dbh_runner(run => set_subname '_undo_create_table', sub {
-            $_->do("DROP TABLE $new_table_name_quote")
-        });
-    });
+    $undo_stack->add_undo(sub { $self->dbh_runner_do("DROP TABLE $new_table_name_quote") });
 
     $progress->update;
 }
@@ -1125,18 +1153,17 @@ sub create_triggers {
 
     ### Check to make sure existing triggers aren't on the table
 
-    my @has_triggers_on_table;
-    $self->dbh_runner(run => set_subname '_has_triggers_check', sub {
+    my @has_triggers_on_table = $self->dbh_runner(run => set_subname '_has_triggers_check', sub {
         $dbh = $_;
 
         if    ($dbms_name eq 'MySQL') {
-            @has_triggers_on_table = $dbh->selectrow_array(
+            return $dbh->selectrow_array(
                 'SELECT trigger_name FROM information_schema.triggers WHERE event_object_schema = DATABASE() AND event_object_table = ?',
                 undef, $orig_table_name
             );
         }
         elsif ($dbms_name eq 'SQLite') {
-            @has_triggers_on_table = $dbh->selectrow_array(
+            return $dbh->selectrow_array(
                 'SELECT name FROM sqlite_master WHERE type = ? AND tbl_name = ?',
                 undef, 'trigger', $orig_table_name
             );
@@ -1271,15 +1298,10 @@ sub create_triggers {
         $trigger_sql .= "\nEND";
 
         # DOIT!
-        $self->dbh_runner(run => set_subname '_trigger_do', sub {
-            $dbh = $_;
-            $dbh->do($trigger_sql);
-        });
+        $self->dbh_runner_do($trigger_sql);
 
         $undo_stack->add_undo(sub {
-            $self->dbh_runner(run => set_subname '_undo_trigger', sub {
-                $_->do( "DROP TRIGGER IF EXISTS ".$self->_vars->{trigger_names_quoted}{$trigger_type} )
-            });
+            $self->dbh_runner_do( "DROP TRIGGER IF EXISTS ".$self->_vars->{trigger_names_quoted}{$trigger_type} );
         });
     }
 
@@ -1314,16 +1336,12 @@ sub copy_rows {
     my $new_table_name       = $self->new_table_name;
     my $new_table_name_quote = $dbh->quote_identifier($new_table_name);
 
-    $self->dbh_runner(run => set_subname '_analyze_table', sub {
-        $dbh = $_;
-
-        if ($dbms_name eq 'SQLite') {
-            $dbh->do("ANALYZE $new_table_name_quote");
-        }
-        else {
-            $dbh->do("ANALYZE TABLE $new_table_name_quote");
-        }
-    });
+    if ($dbms_name eq 'SQLite') {
+        $self->dbh_runner_do("ANALYZE $new_table_name_quote");
+    }
+    else {
+        $self->dbh_runner_do("ANALYZE TABLE $new_table_name_quote");
+    }
 
     $progress->update;
 }
@@ -1384,10 +1402,9 @@ sub swap_tables {
 
     # Let's swap tables!
     if    ($dbms_name eq 'MySQL') {
-        $self->dbh_runner(run => set_subname '_table_swap_mysql', sub {
-            $dbh = $_;
-            $dbh->do("RENAME TABLE $orig_table_name_quote TO $old_table_name_quote, $new_table_name_quote TO $orig_table_name_quote");
-        });
+        $self->dbh_runner_do(
+            "RENAME TABLE $orig_table_name_quote TO $old_table_name_quote, $new_table_name_quote TO $orig_table_name_quote"
+        );
     }
     elsif ($dbms_name eq 'SQLite') {
         # SQLite does not have a swap table as a single statement, but it does have
@@ -1454,27 +1471,21 @@ sub drop_old_table {
         foreach my $tbl_fk_name (sort keys %{$fk_hash->{child}}) {
             my $fk = $fk_hash->{child}{$tbl_fk_name};
 
-            $self->dbh_runner(run => set_subname '_drop_dangling_fks', sub {
-                $dbh = $_;
-                $dbh->do(join ' ',
-                    'ALTER TABLE',
-                    $dbh->quote_identifier( $fk->{fk_table_name} ),
-                    'DROP',
-                    # MySQL uses 'FOREIGN KEY' on DROPs, and everybody else uses 'CONSTRAINT' on both
-                    ($dbms_name eq 'MySQL' ? 'FOREIGN KEY' : 'CONSTRAINT'),
-                    $dbh->quote_identifier( $fk->{fk_name} ),
-                );
-            });
+            $self->dbh_runner_do(join ' ',
+                'ALTER TABLE',
+                $dbh->quote_identifier( $fk->{fk_table_name} ),
+                'DROP',
+                # MySQL uses 'FOREIGN KEY' on DROPs, and everybody else uses 'CONSTRAINT' on both
+                ($dbms_name eq 'MySQL' ? 'FOREIGN KEY' : 'CONSTRAINT'),
+                $dbh->quote_identifier( $fk->{fk_name} ),
+            );
         }
     }
 
     # Now, the actual DROP
     $progress->message("Dropping old table $old_table_name");
 
-    $self->dbh_runner(run => set_subname '_drop_table_do', sub {
-        $dbh = $_;
-        $dbh->do("DROP TABLE $old_table_name_quote");
-    });
+    $self->dbh_runner_do("DROP TABLE $old_table_name_quote");
 
     $progress->update;
 }
@@ -1537,14 +1548,11 @@ sub cleanup_foreign_keys {
             # _fk_to_sql uses this directly, so just change it at the $fk hashref
             $fk->{fk_name} = $orig_fk_name;
 
-            $self->dbh_runner(run => set_subname '_rename_fks', sub {
-                $dbh = $_;
-                $dbh->do(join "\n",
-                    "ALTER TABLE $table_name_quote",
-                    "    DROP FOREIGN KEY ".$dbh->quote_identifier( $changed_fk_name ).',',
-                    "    ADD CONSTRAINT ".$self->_fk_to_sql($fk)
-                );
-            });
+            $self->dbh_runner_do(join "\n",
+                "ALTER TABLE $table_name_quote",
+                "    DROP FOREIGN KEY ".$dbh->quote_identifier( $changed_fk_name ).',',
+                "    ADD CONSTRAINT ".$self->_fk_to_sql($fk)
+            );
         }
     }
 
@@ -1556,15 +1564,12 @@ sub cleanup_foreign_keys {
     foreach my $tbl_fk_name (sort keys %{$fk_hash->{child}}) {
         my $fk = $fk_hash->{child}{$tbl_fk_name};
 
-        $self->dbh_runner(run => set_subname '_readd_fks', sub {
-            $dbh = $_;
-            $dbh->do(join ' ',
-                "ALTER TABLE",
-                $dbh->quote_identifier( $fk->{fk_table_name} ),
-                "ADD CONSTRAINT",
-                $self->_fk_to_sql($fk),
-            );
-        });
+        $self->dbh_runner_do(join ' ',
+            "ALTER TABLE",
+            $dbh->quote_identifier( $fk->{fk_table_name} ),
+            "ADD CONSTRAINT",
+            $self->_fk_to_sql($fk),
+        );
     }
 
     $progress->update;
