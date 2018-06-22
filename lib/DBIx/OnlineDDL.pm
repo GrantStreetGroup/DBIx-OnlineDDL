@@ -9,10 +9,10 @@ use Moo;
 use Types::Standard qw( Str Num Bool HashRef CodeRef InstanceOf Dict Optional );
 
 use DBI::Const::GetInfoType;
-use DBIx::BatchChunker;
+use DBIx::BatchChunker 0.92;  # with stmt attrs
 use Eval::Reversible;
-use List::Compare;
-use List::Util              qw< uniq >;
+use List::Util        1.33 (qw( uniq any all ));  # has any/all/etc.
+use Sub::Util               qw< subname set_subname >;
 use Term::ProgressBar 2.14;   # with silent option
 
 use namespace::clean;  # don't export the above
@@ -33,62 +33,64 @@ version 0.90
     use DBIx::BatchChunker;
 
     DBIx::OnlineDDL->construct_and_execute(
-        rsrc       => $dbic_schema->source('Account'),
+        rsrc          => $dbic_schema->source('Account'),
         ### OR ###
-        dbh        => $dbh,
-        table_name => 'accounts',
+        dbi_connector => $dbix_connector_retry_object,
+        table_name    => 'accounts',
 
         coderef_hooks => {
             # This is the phase where the DDL is actually ran
-            before_triggers => sub {
-                my $oddl = shift;
-                my $dbh  = $oddl->dbh;
-                my $name = $oddl->new_table_name;
-
-                my $qname = $dbh->quote_identifier($name);
-
-                # Drop the 'foobar' column, since it is no longer used
-                $dbh->do("ALTER TABLE $qname DROP COLUMN foobar");
-            },
+            before_triggers => \&drop_foobar,
 
             # Run other operations right before the swap
-            before_swap => sub {
-                my $oddl = shift;
-                my $dbh  = $oddl->dbh;
-                my $name = $oddl->new_table_name;
-
-                my $qname = $dbh->quote_identifier($name);
-
-                DBIx::BatchChunker->construct_and_execute(
-                    chunk_size  => 5000,
-                    target_time => 15,
-
-                    debug   => 1,
-
-                    process_name     => 'Deleting deprecated accounts',
-                    process_past_max => 1,
-
-                    min_sth => $dbh->prepare("SELECT MIN(account_id) FROM $qname"),
-                    max_sth => $dbh->prepare("SELECT MAX(account_id) FROM $qname"),
-                    sth     => $dbh->prepare( join "\n",
-                        "DELETE FROM $qname",
-                        "WHERE",
-                        "    account_type = ".$dbh->quote('deprecated')." AND",
-                        "    account_id BETWEEN ? AND ?",
-                    ),
-                );
-            },
+            before_swap => \&delete_deprecated_accounts,
         },
 
         process_name => 'Dropping foobar from accounts',
 
         copy_opts => {
-            chunk_size  => 5000,
-            target_time => 15,
-
+            chunk_size => 5000,
             debug => 1,
         },
     );
+
+    sub drop_foobar {
+        my $oddl = shift;
+        my $name = $oddl->new_table_name;
+
+        $oddl->dbh_runner(run => sub {
+            my $qname = $_->quote_identifier($name);
+
+            # Drop the 'foobar' column, since it is no longer used
+            $_->do("ALTER TABLE $qname DROP COLUMN foobar");
+        });
+    }
+
+    sub delete_deprecated_accounts {
+        my $oddl = shift;
+        my $name = $oddl->new_table_name;
+
+        my $qname = $oddl->dbi_connector->dbh->quote_identifier($name);
+
+        DBIx::BatchChunker->construct_and_execute(
+            chunk_size  => 5000,
+
+            debug => 1,
+
+            process_name     => 'Deleting deprecated accounts',
+            process_past_max => 1,
+
+            dbic_storage => $oddl->rsrc->storage,
+            min_stmt => "SELECT MIN(account_id) FROM $qname",
+            max_stmt => "SELECT MAX(account_id) FROM $qname",
+            stmt     => join("\n",
+                "DELETE FROM $qname",
+                "WHERE",
+                "    account_type = ".$dbh->quote('deprecated')." AND",
+                "    account_id BETWEEN ? AND ?",
+            ),
+        );
+    }
 
 =head1 DESCRIPTION
 
@@ -157,7 +159,7 @@ Keep using it.
 =head3 rsrc
 
 A L<DBIx::Class::ResultSource>.  This will be the source used for all operations, DDL or
-otherwise.  Optional, but using this will fill in several other attributes.
+otherwise.  Optional, but recommended for DBIC users.
 
 =cut
 
@@ -167,31 +169,40 @@ has rsrc => (
     required => 0,
 );
 
-=head2 DBI Attributes
+=head3 dbic_retry_opts
 
-=head3 dbh
-
-L<DBI> database handle.  This will be the handle used for all operations, DDL or
-otherwise.  Required unless L</rsrc> is specified.
-
-It's highly recommended that L<RaiseError|DBI/RaiseError> is turned on before running
-the schema change.  (In fact, that should be turned on always.  Why continue if the DB is
-failing?)  The L</undo_stack> relies on DB errors dying and this module doesn't bother
-checking DBI error states.
-
-It is also assumed that the correct database is already active.
+A hashref of DBIC retry options.  These options control how retry protection works within
+DBIC.  Right now, this is just limited to C<max_attempts>, which controls the number of
+times to retry.  The default is 20.
 
 =cut
 
-has dbh => (
+has dbic_retry_opts => (
     is       => 'ro',
-    isa      => InstanceOf['DBI::db'],
-    required => 1,
-    lazy     => 1,
-    default  => sub {
-        my $rsrc = shift->rsrc // return;
-        $rsrc->storage->dbh;
-    },
+    isa      => HashRef,
+    required => 0,
+    default  => sub { {} },
+);
+
+=head2 DBI Attributes
+
+=head3 dbi_connector
+
+A L<DBIx::Connector::Retry> object.  Instead of L<DBI> statement handles, this is the
+recommended non-DBIC way for OnlineDDL (and BatchChunker) to interface with the DBI, as
+it handles retries on failures.  The connection mode used is whatever default is set
+within the object.
+
+Required, except for DBIC users, who should be setting L</rsrc> above.  It is also
+assumed that the correct database is already active.
+
+
+=cut
+
+has dbi_connector => (
+    is       => 'ro',
+    isa      => InstanceOf['DBIx::Connector::Retry'],
+    required => 0,
 );
 
 =head3 table_name
@@ -236,8 +247,6 @@ sub _build_new_table_name {
     my $dbh  = $self->dbh;
     my $vars = $self->_vars;
 
-    $dbh->ping;
-
     my $catalog         = $vars->{catalog};
     my $schema          = $vars->{schema};
     my $orig_table_name = $self->table_name;
@@ -245,12 +254,13 @@ sub _build_new_table_name {
     my $escape = $dbh->get_info( $GetInfoType{SQL_SEARCH_PATTERN_ESCAPE} ) // '\\';
 
     return $self->_find_new_identifier(
-        "_${orig_table_name}_new" => sub {
+        "_${orig_table_name}_new" => set_subname('_new_table_name_finder', sub {
+            $dbh = shift;
             my $like_expr = shift;
             $like_expr =~ s/([_%])/$escape$1/g;
 
             $dbh->table_info($catalog, $schema, $like_expr)->fetchrow_array;
-        },
+        }),
         'SQL_MAXIMUM_TABLE_NAME_LENGTH',
     );
 }
@@ -304,7 +314,8 @@ specified.  Otherwise, you're not actually running any DDL and the table copy is
 essentially a no-op.
 
 All of these triggers pass the C<DBIx::OnlineDDL> object as the only argument.  The
-L</new_table_name> can be acquired from that and used in SQL statements.
+L</new_table_name> can be acquired from that and used in SQL statements.  The L</dbh_runner>
+method should be used to protect against disconnections or locks.
 
 There is room to add more hooks here, but only if there's a good reason to do so.
 (Running the wrong kind of SQL at the wrong time could be dangerous.)  Create an GitHub
@@ -345,9 +356,7 @@ An hashref of different options to pass to L<DBIx::BatchChunker>, which is used 
 L</copy_rows> step.  Some of these are defined automatically.  It's recommended that you
 specify at least these options:
 
-    chunk_size  => 5000,  # or whatever is a reasonable size for that table
-    target_time => 15,    # runtime targeting of 15 seconds
-
+    chunk_size  => 5000,     # or whatever is a reasonable size for that table
     id_name     => 'pk_id',  # especially if there isn't an obvious integer PK
 
 Specifying L<DBIx::BatchChunker/coderef> is not recommended, since Active DBI Processing
@@ -384,15 +393,30 @@ sub _fill_copy_opts {
     my $dbms_name = $self->_vars->{dbms_name};
 
     # Figure out what the id_name is going to be
-    my $id_name = $copy_opts->{id_name} //= ( $dbh->primary_key($catalog, $schema, $orig_table_name) )[0];
+    my $id_name = $copy_opts->{id_name} //= $self->dbh_runner(run => set_subname '_pk_finder', sub {
+        $dbh = $_;
+        my @ids = $dbh->primary_key($catalog, $schema, $orig_table_name);
+
+        die  "No primary key found for $orig_table_name"                                 unless @ids;
+        warn "Using the first column of a multi-column primary key for $orig_table_name" if @ids > 1;
+
+        $ids[0];
+    });
+
     my $id_name_quote = $dbh->quote_identifier($id_name);
 
     if ($rsrc) {
+        $copy_opts->{dbic_storage} //= $rsrc->storage;
         $copy_opts->{rsc} //= $rsrc->resultset->get_column($id_name);
+
+        $copy_opts->{dbic_retry_opts} //= {};
+        $copy_opts->{dbic_retry_opts}{max_attempts}  //= 20;
+        $copy_opts->{dbic_retry_opts}{retry_handler}   = sub { $self->_retry_handler(@_) };
     }
     else {
-        $copy_opts->{min_sth} //= $dbh->prepare("SELECT MIN($id_name_quote) FROM $orig_table_name_quote");
-        $copy_opts->{max_sth} //= $dbh->prepare("SELECT MAX($id_name_quote) FROM $orig_table_name_quote");
+        $copy_opts->{dbi_connector} //= $self->dbi_connector;
+        $copy_opts->{min_stmt} //= "SELECT MIN($id_name_quote) FROM $orig_table_name_quote";
+        $copy_opts->{max_stmt} //= "SELECT MAX($id_name_quote) FROM $orig_table_name_quote";
     }
 
     my @column_list = $self->_column_list;
@@ -441,8 +465,8 @@ sub _fill_copy_opts {
         );
     }
 
-    $copy_opts->{count_sth} //= $dbh->prepare("SELECT COUNT(*) FROM $orig_table_name_quote WHERE $id_name_quote BETWEEN ? AND ?");
-    $copy_opts->{sth}       //= $dbh->prepare($insert_select_stmt);
+    $copy_opts->{count_stmt} //= "SELECT COUNT(*) FROM $orig_table_name_quote WHERE $id_name_quote BETWEEN ? AND ?";
+    $copy_opts->{stmt}       //= $insert_select_stmt;
 
     $copy_opts->{progress_name} //= "Copying $orig_table_name" unless $copy_opts->{progress_bar};
 
@@ -472,6 +496,20 @@ has _vars => (
     lazy     => 1,
     default  => sub { {} },
 );
+
+around BUILDARGS => sub {
+    my $next  = shift;
+    my $class = shift;
+
+    my %args = @_ == 1 ? %{ $_[0] } : @_;
+
+    # Quick sanity checks
+    die 'A DBIC ResultSource (rsrc) or DBIx::Connector::Retry object (dbi_connector) is required' unless (
+        $args{rsrc} || $args{dbi_connector}
+    );
+
+    $class->$next( %args );
+};
 
 sub BUILD {
     my $self = shift;
@@ -591,6 +629,149 @@ sub fire_hook {
     $progress->update;
 }
 
+=head2 dbh_runner
+
+    $online_ddl->dbh_runner(run => sub {
+        my $dbh = $_;  # or $_[0]
+        $dbh->do(...);
+    });
+
+Runs the C<$coderef>, locally setting C<$_> to and passing in the database handle.  This
+is essentially a shortcut interface into either L<dbi_connector> or DBIC's L<BlockRunner|DBIx::Class::Storage::BlockRunner>.
+
+The first argument can either be C<run> or C<txn>, which controls whether to wrap the
+code in a DB transaction or not.  The return is passed directly back, and return context
+is honored.
+
+=cut
+
+sub _retry_handler {
+    my ($self, $runner) = @_;
+    my $vars = $self->_vars;
+
+    # NOTE: There's a lot of abusing the fact that BlockRunner and DBIx::Connector::Retry
+    # (a la $runner) share similar accessor interfaces.
+
+    my $error     = $runner->last_exception;
+    my $dbms_name = $vars->{dbms_name};
+
+    my $is_retryable = 0;
+
+    # Locks/timeouts/etc. problems should still force a retry, so check for these kind of
+    # errors.  Disable /x flag to allow for whitespace within string, but turn it on for
+    # newlines and comments.
+    if    ($dbms_name eq 'MySQL') {
+        $is_retryable = $error =~ m<
+            # Locks
+            (?-x:Deadlock found)|
+            (?-x:WSREP detected deadlock\/conflict)|
+            (?-x:Lock wait timeout exceeded)|
+
+            # Connections
+            (?-x:MySQL server has gone away)|
+            (?-x:Lost connection to MySQL server)|
+
+            # Queries
+            (?-x:Query execution was interrupted)
+        >x;
+    }
+    elsif ($dbms_name eq 'SQLite') {
+        $is_retryable = $error =~ m<
+            # Locks
+            (?-x:database( table)? is locked)|
+
+            # Connections
+            (?-x:attempt to [\w\s]+ on inactive database handle)|
+
+            # Queries
+            (?-x:query aborted)|
+            (?-x:interrupted)
+        >xi;
+    }
+    else {
+        warn "Not sure how to inspect DB errors for $dbms_name systems!";
+        return 0;
+    }
+
+    if ($is_retryable) {
+        my $progress = $vars->{progress_bar};
+
+        # Warn about the last error
+        $progress->message("Encountered a recoverable error: $error") if $progress;
+
+        # Pause for a second first, to discourage any future locks
+        sleep 1;
+
+        $progress->message( sprintf(
+            "Attempt %u of %u",
+            $runner->failed_attempt_count,
+            $runner->max_attempts,
+        ) ) if $progress;
+    }
+
+    return $is_retryable;
+}
+
+sub dbh_runner {
+    my ($self, $method, $coderef) = @_;
+    my $wantarray = wantarray;
+
+    die "Only 'txn' or 'run' are acceptable run methods" unless $method =~ /^(?:txn|run)$/;
+
+    my @res;
+    if (my $rsrc = $self->rsrc) {
+        # No need to load BlockRunner, since DBIC loads it in before us if we're using
+        # this method.
+        my $block_runner = DBIx::Class::Storage::BlockRunner->new(
+            # defaults
+            max_attempts => 20,
+
+            # never overrides the important ones below
+            %{ $self->dbic_retry_opts },
+
+            retry_handler => sub { $self->_retry_handler(@_) },
+            storage  => $rsrc->storage,
+            wrap_txn => ($method eq 'txn' ? 1 : 0),
+        );
+
+        # This wrapping nonsense is necessary because Try::Tiny within BlockRunner has its own
+        # localization of $_.  Fortunately, we can pass arguments to avoid closures.
+        my $wrapper = set_subname '_dbh_run_blockrunner_wrapper' => sub {
+            my ($s, $c) = @_;
+            my $dbh = $s->rsrc->storage->dbh;
+
+            local $_ = $dbh;
+            $c->($dbh);  # also pass it in, because that's what DBIx::Connector does
+        };
+
+        unless (defined $wantarray) {           $block_runner->run($wrapper, $self, $coderef) }
+        elsif          ($wantarray) { @res    = $block_runner->run($wrapper, $self, $coderef) }
+        else                        { $res[0] = $block_runner->run($wrapper, $self, $coderef) }
+    }
+    else {
+        my $conn = $self->dbi_connector;
+        unless (defined $wantarray) {           $conn->$method($coderef) }
+        elsif          ($wantarray) { @res    = $conn->$method($coderef) }
+        else                        { $res[0] = $conn->$method($coderef) }
+    }
+
+    return $wantarray ? @res : $res[0];
+}
+
+=head2 dbh
+
+    $online_ddl->dbh;
+
+Acquires a database handle, either from L</rsrc> or L</dbi_connector>.  Not recommended
+for active work, as it doesn't offer retry protection.  Instead, use L</dbh_runner>.
+
+=cut
+
+sub dbh {
+    my $self = shift;
+    return $self->rsrc ? $self->rsrc->storage->dbh : $self->dbi_connector->dbh;
+}
+
 =head1 STEP METHODS
 
 You can call these methods individually, but using L</construct_and_execute> instead is
@@ -658,15 +839,21 @@ sub _create_table_sql {
     my $qtable = $dbh->quote_identifier($table);
 
     my $dbms_name = $vars->{dbms_name};
-    if    ($dbms_name eq 'MySQL') {
-        return $dbh->selectrow_hashref("SHOW CREATE TABLE $qtable")->{'Create Table'};
-    }
-    elsif ($dbms_name eq 'SQLite') {
-        my ($table_sql) = $dbh->selectrow_array('SELECT sql FROM sqlite_master WHERE name = ?', undef, $table);
-        return $table_sql;
-    }
+    my $create_sql;
+    $self->dbh_runner(run => set_subname '_get_create_table_sql', sub {
+        $dbh = $_;
+        if    ($dbms_name eq 'MySQL') {
+            $create_sql = $dbh->selectrow_hashref("SHOW CREATE TABLE $qtable")->{'Create Table'};
+        }
+        elsif ($dbms_name eq 'SQLite') {
+            ($create_sql) = $dbh->selectrow_array('SELECT sql FROM sqlite_master WHERE name = ?', undef, $table);
+        }
+        else {
+            die "Not sure how to create a new table for $dbms_name systems!";
+        }
+    });
 
-    die "Not sure how to create a new table for $dbms_name systems!";
+    return $create_sql;
 }
 
 sub create_new_table {
@@ -700,10 +887,10 @@ sub create_new_table {
 
         foreach my $fk_name (@fk_names) {
             my $new_fk_name = $self->_find_new_identifier(
-                "_${fk_name}" => sub {
-                    $dbh->selectrow_array(
+                "_${fk_name}" => set_subname '_fk_name_finder', sub {
+                    $_[0]->selectrow_array(
                         'SELECT table_name FROM information_schema.key_column_usage WHERE constraint_schema = DATABASE() AND constraint_name = ?',
-                        undef, $_[0]
+                        undef, $_[1]
                     );
                 },
             );
@@ -719,11 +906,18 @@ sub create_new_table {
     $table_sql =~ s/(?<=^CREATE TABLE )$orig_table_name_quote_re/$new_table_name_quote/;
 
     # Actually create the table
-    $dbh->do($table_sql);
+    $self->dbh_runner(run => set_subname '_create_table_do', sub {
+        $dbh = $_;
+        $dbh->do($table_sql);
+    });
 
     # Undo commands, including a failure warning update
     $undo_stack->failure_warning("\nDropping the new table and rolling back to start!\n\n");
-    $undo_stack->add_undo(sub { $self->dbh->do("DROP TABLE $new_table_name_quote") });
+    $undo_stack->add_undo(sub {
+        $self->dbh_runner(run => set_subname '_undo_create_table', sub {
+            $_->do("DROP TABLE $new_table_name_quote")
+        });
+    });
 
     $progress->update;
 }
@@ -763,61 +957,69 @@ sub create_triggers {
 
     # We need to find a proper PK or unique constraint for UPDATE/DELETE triggers.
     # Unlike BatchChunker, we can't just rely on part of a PK.
-    my %potential_unique_ids = (
-        PRIMARY => [ $dbh->primary_key($catalog, $schema, $orig_table_name) ],
-    );
-    my $unique_stats = $dbh->can('statistics_info') ?
-        $dbh->statistics_info( $catalog, $schema, $orig_table_name, 1, 1 )->fetchall_arrayref({}) :
-        []
-    ;
-
-    foreach my $index_name (uniq map { $_->{INDEX_NAME} } @$unique_stats) {
-        my @unique_cols =
-            map  { $_->{COLUMN_NAME} }
-            sort { $a->{ORDINAL_POSITION} <=> $b->{ORDINAL_POSITION} }
-            grep { $_->{INDEX_NAME} eq $index_name && !$_->{NON_UNIQUE} }  # some DBDs might not honor the $unique_only param
-            @$unique_stats
-        ;
-        $potential_unique_ids{$index_name} = \@unique_cols;
-    }
-
     my @unique_ids;
-    foreach my $index_name ('PRIMARY',
-        # sort by the number of columns (asc), though PRIMARY still has top priority
-        sort { scalar(@{$potential_unique_ids{$a}}) <=> scalar(@{$potential_unique_ids{$b}}) }
-        grep { $_ ne 'PRIMARY' }
-        keys %potential_unique_ids
-    ) {
-        my @unique_cols = @{ $potential_unique_ids{$index_name} };
-        next unless @unique_cols;
+    $self->dbh_runner(run => set_subname '_unique_id_finder', sub {
+        $dbh = $_;
 
-        # Only use this set if all of the columns exist in both tables
-        my $lc = List::Compare->new(\@unique_cols, \@column_list);
-        next unless $lc->is_LsubsetR;
+        my %potential_unique_ids = (
+            PRIMARY => [ $dbh->primary_key($catalog, $schema, $orig_table_name) ],
+        );
+        my $unique_stats = $dbh->can('statistics_info') ?
+            $dbh->statistics_info( $catalog, $schema, $orig_table_name, 1, 1 )->fetchall_arrayref({}) :
+            []
+        ;
 
-        @unique_ids = @unique_cols;
-    }
+        foreach my $index_name (uniq map { $_->{INDEX_NAME} } @$unique_stats) {
+            my @unique_cols =
+                map  { $_->{COLUMN_NAME} }
+                sort { $a->{ORDINAL_POSITION} <=> $b->{ORDINAL_POSITION} }
+                grep { $_->{INDEX_NAME} eq $index_name && !$_->{NON_UNIQUE} }  # some DBDs might not honor the $unique_only param
+                @$unique_stats
+            ;
+            $potential_unique_ids{$index_name} = \@unique_cols;
+        }
+
+        my %column_set = map { $_ => 1 } @column_list;
+        foreach my $index_name ('PRIMARY',
+            # sort by the number of columns (asc), though PRIMARY still has top priority
+            sort { scalar(@{$potential_unique_ids{$a}}) <=> scalar(@{$potential_unique_ids{$b}}) }
+            grep { $_ ne 'PRIMARY' }
+            keys %potential_unique_ids
+        ) {
+            my @unique_cols = @{ $potential_unique_ids{$index_name} };
+            next unless @unique_cols;
+
+            # Only use this set if all of the columns exist in both tables
+            next unless all { $column_set{$_} } @unique_cols;
+
+            @unique_ids = @unique_cols;
+        }
+    });
 
     die "Cannot find an appropriate unique index for $orig_table_name!" unless @unique_ids;
 
     ### Check to make sure existing triggers aren't on the table
 
     my @has_triggers_on_table;
-    if    ($dbms_name eq 'MySQL') {
-        @has_triggers_on_table = $dbh->selectrow_array(
-            'SELECT trigger_name FROM information_schema.triggers WHERE event_object_schema = DATABASE() AND event_object_table = ?',
-            undef, $orig_table_name
-        );
-    }
-    elsif ($dbms_name eq 'SQLite') {
-        @has_triggers_on_table = $dbh->selectrow_array(
-            'SELECT name FROM sqlite_master WHERE type = ? AND tbl_name = ?',
-            undef, 'trigger', $orig_table_name
-        );
-    }
-    else {
-        die "Not sure how to check for table triggers for $dbms_name systems!";
-    }
+    $self->dbh_runner(run => set_subname '_has_triggers_check', sub {
+        $dbh = $_;
+
+        if    ($dbms_name eq 'MySQL') {
+            @has_triggers_on_table = $dbh->selectrow_array(
+                'SELECT trigger_name FROM information_schema.triggers WHERE event_object_schema = DATABASE() AND event_object_table = ?',
+                undef, $orig_table_name
+            );
+        }
+        elsif ($dbms_name eq 'SQLite') {
+            @has_triggers_on_table = $dbh->selectrow_array(
+                'SELECT name FROM sqlite_master WHERE type = ? AND tbl_name = ?',
+                undef, 'trigger', $orig_table_name
+            );
+        }
+        else {
+            die "Not sure how to check for table triggers for $dbms_name systems!";
+        }
+    });
 
     die "Found triggers on $orig_table_name!  Please remove them first, so that our INSERT/UPDATE/DELETE triggers can be applied."
         if @has_triggers_on_table;
@@ -826,18 +1028,18 @@ sub create_triggers {
 
     my $trigger_finder_sub;
     if    ($dbms_name eq 'MySQL') {
-        $trigger_finder_sub = sub {
-            $dbh->selectrow_array(
+        $trigger_finder_sub = set_subname '_trigger_finder_mysql', sub {
+            $_[0]->selectrow_array(
                 'SELECT trigger_name FROM information_schema.triggers WHERE trigger_schema = DATABASE() AND trigger_name = ?',
-                undef, $_[0]
+                undef, $_[1]
             );
         };
     }
     elsif ($dbms_name eq 'SQLite') {
-        $trigger_finder_sub = sub {
-            $dbh->selectrow_array(
+        $trigger_finder_sub = set_subname '_trigger_finder_sqlite', sub {
+            $_[0]->selectrow_array(
                 'SELECT name FROM sqlite_master WHERE type = ? AND name = ?',
-                undef, 'trigger', $_[0]
+                undef, 'trigger', $_[1]
             );
         };
     }
@@ -944,9 +1146,15 @@ sub create_triggers {
         $trigger_sql .= "\nEND";
 
         # DOIT!
-        $dbh->do($trigger_sql);
+        $self->dbh_runner(run => set_subname '_trigger_do', sub {
+            $dbh = $_;
+            $dbh->do($trigger_sql);
+        });
+
         $undo_stack->add_undo(sub {
-            $self->dbh->do( "DROP TRIGGER IF EXISTS ".$self->_vars->{trigger_names_quoted}{$trigger_type} )
+            $self->dbh_runner(run => set_subname '_undo_trigger', sub {
+                $_->do( "DROP TRIGGER IF EXISTS ".$self->_vars->{trigger_names_quoted}{$trigger_type} )
+            });
         });
     }
 
@@ -981,12 +1189,16 @@ sub copy_rows {
     my $new_table_name       = $self->new_table_name;
     my $new_table_name_quote = $dbh->quote_identifier($new_table_name);
 
-    if ($dbms_name eq 'SQLite') {
-        $dbh->do("ANALYZE $new_table_name_quote");
-    }
-    else {
-        $dbh->do("ANALYZE TABLE $new_table_name_quote");
-    }
+    $self->dbh_runner(run => set_subname '_analyze_table', sub {
+        $dbh = $_;
+
+        if ($dbms_name eq 'SQLite') {
+            $dbh->do("ANALYZE $new_table_name_quote");
+        }
+        else {
+            $dbh->do("ANALYZE TABLE $new_table_name_quote");
+        }
+    });
 
     $progress->update;
 }
@@ -1025,17 +1237,20 @@ sub swap_tables {
     # use that as reference.  They have *not* been re-created on the child tables, so
     # the original table is used as reference.
     my $fk_hash = $vars->{foreign_keys}{definitions} //= {};
-    $fk_hash->{parent} = $self->_fk_info_to_hash( $dbh->foreign_key_info(undef, undef, undef, $catalog, $schema, $new_table_name)  );
-    $fk_hash->{child}  = $self->_fk_info_to_hash( $dbh->foreign_key_info($catalog, $schema, $orig_table_name, undef, undef, undef) );
+    $self->dbh_runner(run => set_subname '_fk_info_query', sub {
+        $dbh = $_;
+        $fk_hash->{parent} = $self->_fk_info_to_hash( $dbh->foreign_key_info(undef, undef, undef, $catalog, $schema, $new_table_name)  );
+        $fk_hash->{child}  = $self->_fk_info_to_hash( $dbh->foreign_key_info($catalog, $schema, $orig_table_name, undef, undef, undef) );
+    });
 
     # Find an "_old" table name first
     my $old_table_name = $vars->{old_table_name} = $self->_find_new_identifier(
-        "_${orig_table_name}_old" => sub {
-            my $like_expr = shift;
+        "_${orig_table_name}_old" => set_subname('_old_table_name_finder', sub {
+            my ($d, $like_expr) = @_;
             $like_expr =~ s/([_%])/$escape$1/g;
 
-            $dbh->table_info($catalog, $schema, $like_expr)->fetchrow_array;
-        },
+            $d->table_info($catalog, $schema, $like_expr)->fetchrow_array;
+        }),
         'SQL_MAXIMUM_TABLE_NAME_LENGTH',
     );
     my $old_table_name_quote = $dbh->quote_identifier($old_table_name);
@@ -1044,15 +1259,19 @@ sub swap_tables {
 
     # Let's swap tables!
     if    ($dbms_name eq 'MySQL') {
-        $dbh->do("RENAME TABLE $orig_table_name_quote TO $old_table_name_quote, $new_table_name_quote TO $orig_table_name_quote");
+        $self->dbh_runner(run => set_subname '_table_swap_mysql', sub {
+            $dbh = $_;
+            $dbh->do("RENAME TABLE $orig_table_name_quote TO $old_table_name_quote, $new_table_name_quote TO $orig_table_name_quote");
+        });
     }
     elsif ($dbms_name eq 'SQLite') {
         # SQLite does not have a swap table as a single statement, but it does have
         # transactional DDL.
-        $dbh->do('BEGIN TRANSACTION');
-        $dbh->do("ALTER TABLE $orig_table_name_quote RENAME TO $old_table_name_quote");
-        $dbh->do("ALTER TABLE $new_table_name_quote RENAME TO $orig_table_name_quote");
-        $dbh->do('COMMIT');
+        $self->dbh_runner(txn => set_subname '_table_swap_sqlite', sub {
+            $dbh = $_;
+            $dbh->do("ALTER TABLE $orig_table_name_quote RENAME TO $old_table_name_quote");
+            $dbh->do("ALTER TABLE $new_table_name_quote RENAME TO $orig_table_name_quote");
+        });
     }
     else {
         die "Not sure how to swap tables for $dbms_name systems!";
@@ -1110,21 +1329,27 @@ sub drop_old_table {
         foreach my $tbl_fk_name (sort keys %{$fk_hash->{child}}) {
             my $fk = $fk_hash->{child}{$tbl_fk_name};
 
-            $dbh->do(join ' ',
-                'ALTER TABLE',
-                $dbh->quote_identifier( $fk->{fk_table_name} ),
-                'DROP',
-                # MySQL uses 'FOREIGN KEY' on DROPs, and everybody else uses 'CONSTRAINT' on both
-                ($dbms_name eq 'MySQL' ? 'FOREIGN KEY' : 'CONSTRAINT'),
-                $dbh->quote_identifier( $fk->{fk_name} ),
-            );
+            $self->dbh_runner(run => set_subname '_drop_dangling_fks', sub {
+                $dbh = $_;
+                $dbh->do(join ' ',
+                    'ALTER TABLE',
+                    $dbh->quote_identifier( $fk->{fk_table_name} ),
+                    'DROP',
+                    # MySQL uses 'FOREIGN KEY' on DROPs, and everybody else uses 'CONSTRAINT' on both
+                    ($dbms_name eq 'MySQL' ? 'FOREIGN KEY' : 'CONSTRAINT'),
+                    $dbh->quote_identifier( $fk->{fk_name} ),
+                );
+            });
         }
     }
 
     # Now, the actual DROP
     $progress->message("Dropping old table $old_table_name");
 
-    $dbh->do("DROP TABLE $old_table_name_quote");
+    $self->dbh_runner(run => set_subname '_drop_table_do', sub {
+        $dbh = $_;
+        $dbh->do("DROP TABLE $old_table_name_quote");
+    });
 
     $progress->update;
 }
@@ -1187,11 +1412,14 @@ sub cleanup_foreign_keys {
             # _fk_to_sql uses this directly, so just change it at the $fk hashref
             $fk->{fk_name} = $orig_fk_name;
 
-            $dbh->do(join "\n",
-                "ALTER TABLE $table_name_quote",
-                "    DROP FOREIGN KEY ".$dbh->quote_identifier( $changed_fk_name ).',',
-                "    ADD CONSTRAINT ".$self->_fk_to_sql($fk)
-            );
+            $self->dbh_runner(run => set_subname '_rename_fks', sub {
+                $dbh = $_;
+                $dbh->do(join "\n",
+                    "ALTER TABLE $table_name_quote",
+                    "    DROP FOREIGN KEY ".$dbh->quote_identifier( $changed_fk_name ).',',
+                    "    ADD CONSTRAINT ".$self->_fk_to_sql($fk)
+                );
+            });
         }
     }
 
@@ -1203,12 +1431,15 @@ sub cleanup_foreign_keys {
     foreach my $tbl_fk_name (sort keys %{$fk_hash->{child}}) {
         my $fk = $fk_hash->{child}{$tbl_fk_name};
 
-        $dbh->do(join ' ',
-            "ALTER TABLE",
-            $dbh->quote_identifier( $fk->{fk_table_name} ),
-            "ADD CONSTRAINT",
-            $self->_fk_to_sql($fk),
-        );
+        $self->dbh_runner(run => set_subname '_readd_fks', sub {
+            $dbh = $_;
+            $dbh->do(join ' ',
+                "ALTER TABLE",
+                $dbh->quote_identifier( $fk->{fk_table_name} ),
+                "ADD CONSTRAINT",
+                $self->_fk_to_sql($fk),
+            );
+        });
     }
 
     $progress->update;
@@ -1237,7 +1468,9 @@ sub _find_new_identifier {
     foreach my $potential_name (@potential_names) {
         $potential_name = substr($potential_name, 0, $max_len);  # avoid the ID name character limit
 
-        my @results = $finder_sub->($potential_name);
+        my @results = $self->dbh_runner(run => set_subname '_find_new_identifier_dbh_runner', sub {
+            $finder_sub->($_, $potential_name);
+        });
 
         # Skip if we found it
         next if @results;
@@ -1262,22 +1495,24 @@ sub _column_list {
     my $orig_table_name = $self->table_name;
     my $new_table_name  = $self->new_table_name;
 
-    my @old_column_list =
-        map { $_->{COLUMN_NAME} }
-        @{ $dbh->column_info( $catalog, $schema, $orig_table_name, '%' )->fetchall_arrayref({ COLUMN_NAME => 1 }) }
-    ;
-    my @new_column_list =
-        map { $_->{COLUMN_NAME} }
-        @{ $dbh->column_info( $catalog, $schema, $new_table_name, '%' )->fetchall_arrayref({ COLUMN_NAME => 1 }) }
-    ;
+    my (@old_column_list, @new_column_list);
+    $self->dbh_runner(run => set_subname '_column_list_runner', sub {
+        $dbh = $_;
+        @old_column_list =
+            map { $_->{COLUMN_NAME} }
+            @{ $dbh->column_info( $catalog, $schema, $orig_table_name, '%' )->fetchall_arrayref({ COLUMN_NAME => 1 }) }
+        ;
+        @new_column_list =
+            map { $_->{COLUMN_NAME} }
+            @{ $dbh->column_info( $catalog, $schema, $new_table_name, '%' )->fetchall_arrayref({ COLUMN_NAME => 1 }) }
+        ;
+    });
 
     # We only care about columns that exist in both tables.  If a column was added on the
     # new table, there's no data to copy.  If a column was deleted from the new table, we
     # don't care about keeping it.
-    return List::Compare->new( {
-        lists    => [\@old_column_list, \@new_column_list],
-        unsorted => 1,  # maintain database column order
-    } )->get_intersection;
+    my %new_column_set = map { $_ => 1 } @new_column_list;
+    return grep { $new_column_set{$_} } @old_column_list;
 }
 
 sub _fk_info_to_hash {
