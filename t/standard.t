@@ -14,13 +14,29 @@ use DBIx::BatchChunker;
 use DBIx::OnlineDDL;
 use CDTest;
 
-use Env qw< ONLINEDDL_TEST_DEBUG >;
+use Path::Class 'file';
+
+use Env qw< ONLINEDDL_TEST_DEBUG CDTEST_MASS_POPULATE CDTEST_DSN CDTEST_DBUSER CDTEST_DBPASS >;
 
 ############################################################
 
-my $CHUNK_SIZE = $ENV{CDTEST_MASS_POPULATE} ? 5000 : 3;
+my $FILE = file(__FILE__);
+my $root = $FILE->dir->parent;
+my $db_file = $root->file('t', $FILE->basename.'.db');
+
+my $CHUNK_SIZE = $CDTEST_MASS_POPULATE ? 5000 : 3;
+
+# Enforce a real file SQLite DB if default
+unless ($CDTEST_DSN) {
+    $CDTEST_DSN    = "dbi:SQLite:dbname=$db_file";
+    $CDTEST_DBUSER = '';
+    $CDTEST_DBPASS = '';
+    unlink $db_file if -e $db_file;
+}
 
 my $dbms_name = CDTest->dbms_name;
+
+############################################################
 
 sub onlineddl_test ($&) {
     my ($test_name, $test_code) = @_;
@@ -60,21 +76,16 @@ sub onlineddl_test ($&) {
             rows => 1,
         });
 
-        # Overload $oddl->dbh, so that every time it's called, it will mess with the original
-        # table.  OnlineDDL acquires the $dbh object in just about every method, so this will
-        # best simulate real-time usage of the table.
-        no warnings 'redefine';
-        my $orig_dbh_sub = \&DBIx::OnlineDDL::dbh;
-        local *DBIx::OnlineDDL::dbh = sub {
-            my $dbh = $orig_dbh_sub->(@_);
-            return $dbh unless $dbh;
-            my $oddl = shift;
+        # A sub for messing with the original table while OnlineDDL is in progress.
+        my $dc_count = 0;
+        my $activity_sim_sub = sub {
+            my ($oddl, $dbh) = @_;
 
             my $row = $iu_track_rs->first;
             $iu_track_rs->reset;
-            return $dbh unless $row;
+            return unless $row;
 
-            my $method = (caller(1))[3];
+            my $method = (caller(2))[3];
 
             # INSERT
             my $cdid = $row->get_column('cd');
@@ -130,6 +141,30 @@ sub onlineddl_test ($&) {
                 my ($new_row_count) = $dbh->selectrow_array("SELECT COUNT(*) FROM $table_name");
                 cmp_ok($new_row_count, '==', $row_count, "Row counts from '$table_name' are as expected ($method)");
             }
+
+            # Try to eliminate the connection, to simulate a flakey connection
+            $dc_count++;
+            unless ($method =~ /(?:BUILD|_post_connection_stmts)$/ || $dc_count % 3) {
+                if ($dbms_name eq 'MySQL') {
+                    eval { $dbh->do('KILL CONNECTION CONNECTION_ID()') };
+                }
+                else {
+                    $dbh->disconnect;
+                }
+            }
+        };
+
+        # Overload $oddl->dbh, so that every time it's called, it will mess with the original
+        # table.  OnlineDDL acquires the $dbh object in just about every method, so this will
+        # best simulate real-time usage of the table.
+        no warnings 'redefine';
+        my $orig_dbh_sub = \&DBIx::OnlineDDL::dbh;
+        local *DBIx::OnlineDDL::dbh = sub {
+            my $dbh = $orig_dbh_sub->(@_);
+            return $dbh unless $dbh;
+            my $oddl = shift;
+
+            $activity_sim_sub->($oddl, $dbh);
 
             return $dbh;
         };
@@ -208,7 +243,10 @@ onlineddl_test 'Add column' => sub {
                 my $qname = $dbh->quote_identifier($name);
                 my $qcol  = $dbh->quote_identifier('test_column');
 
-                $dbh->do("ALTER TABLE $qname ADD COLUMN $qcol VARCHAR(100) NULL");
+                $oddl->dbh_runner(run => sub {
+                    $dbh = $_;
+                    $dbh->do("ALTER TABLE $qname ADD COLUMN $qcol VARCHAR(100) NULL");
+                });
             },
         },
 
@@ -260,11 +298,17 @@ onlineddl_test 'Add column + title change' => sub {
                 my $qcol  = $dbh->quote_identifier('test_column');
                 my $qidx  = $dbh->quote_identifier('track_cd_title');
 
-                $dbh->do("ALTER TABLE $qname ADD COLUMN $qcol VARCHAR(100) NULL");
+                $oddl->dbh_runner(run => sub {
+                    $dbh = $_;
+                    $dbh->do("ALTER TABLE $qname ADD COLUMN $qcol VARCHAR(100) NULL");
+                });
 
-                # SQLite can't DROP on an ALTER TABLE, but isn't bothered by the breaking of
-                # a unique index (for some reason)
-                $dbh->do("ALTER TABLE $qname DROP INDEX $qidx") unless $dbms_name eq 'SQLite';
+                $oddl->dbh_runner(run => sub {
+                    $dbh = $_;
+                    # SQLite can't DROP on an ALTER TABLE, but isn't bothered by the breaking of
+                    # a unique index (for some reason)
+                    $dbh->do("ALTER TABLE $qname DROP INDEX $qidx") unless $dbms_name eq 'SQLite';
+                });
             },
             before_swap => sub {
                 my $oddl = shift;
@@ -277,9 +321,10 @@ onlineddl_test 'Add column + title change' => sub {
                     chunk_size => $CHUNK_SIZE,
                     process_past_max => 1,
 
-                    min_sth => $dbh->prepare("SELECT MIN(trackid) FROM $qname"),
-                    max_sth => $dbh->prepare("SELECT MAX(trackid) FROM $qname"),
-                    sth     => $dbh->prepare( join ' ',
+                    dbic_storage => $oddl->rsrc->storage,
+                    min_stmt => "SELECT MIN(trackid) FROM $qname",
+                    max_stmt => "SELECT MAX(trackid) FROM $qname",
+                    stmt     => join( ' ',
                         'UPDATE',
                         $dbh->quote_identifier($name),
                         'SET title =',
@@ -339,7 +384,10 @@ onlineddl_test 'Drop column' => sub {
                 my $qname = $dbh->quote_identifier($name);
                 my $qcol  = $dbh->quote_identifier('last_updated_at');
 
-                $dbh->do("ALTER TABLE $qname DROP COLUMN $qcol");
+                $oddl->dbh_runner(run => sub {
+                    $dbh = $_;
+                    $dbh->do("ALTER TABLE $qname DROP COLUMN $qcol");
+                });
             },
         },
 
@@ -379,22 +427,27 @@ onlineddl_test 'Drop PK' => sub {
                 my $qname = $dbh->quote_identifier($name);
                 my $qcol  = $dbh->quote_identifier('trackid');
 
-                $dbh->do("ALTER TABLE $qname DROP COLUMN $qcol");
+                $oddl->dbh_runner(run => sub {
+                    $dbh = $_;
+                    $dbh->do("ALTER TABLE $qname DROP COLUMN $qcol");
+                });
 
-                # Need to also drop the FK on lyrics
-                my $fk_hash = $oddl->_fk_info_to_hash( $dbh->foreign_key_info(
-                    $oddl->_vars->{catalog}, $oddl->_vars->{schema}, $oddl->table_name,
-                    undef, undef, undef
-                ) );
+                $oddl->dbh_runner(run => sub {
+                    # Need to also drop the FK on lyrics
+                    my $fk_hash = $oddl->_fk_info_to_hash( $dbh->foreign_key_info(
+                        $oddl->_vars->{catalog}, $oddl->_vars->{schema}, $oddl->table_name,
+                        undef, undef, undef
+                    ) );
 
-                $dbh->do(join ' ',
-                    'ALTER TABLE',
-                    $dbh->quote_identifier('lyrics'),
-                    'DROP',
-                    # MySQL uses 'FOREIGN KEY' on DROPs, and everybody else uses 'CONSTRAINT' on both
-                    ($dbms_name eq 'MySQL' ? 'FOREIGN KEY' : 'CONSTRAINT'),
-                    $dbh->quote_identifier( (values %$fk_hash)[0]->{fk_name} ),
-                );
+                    $dbh->do(join ' ',
+                        'ALTER TABLE',
+                        $dbh->quote_identifier('lyrics'),
+                        'DROP',
+                        # MySQL uses 'FOREIGN KEY' on DROPs, and everybody else uses 'CONSTRAINT' on both
+                        ($dbms_name eq 'MySQL' ? 'FOREIGN KEY' : 'CONSTRAINT'),
+                        $dbh->quote_identifier( (values %$fk_hash)[0]->{fk_name} ),
+                    );
+                });
             },
         },
 
@@ -417,5 +470,7 @@ onlineddl_test 'Drop PK' => sub {
 };
 
 ############################################################
+
+unlink $db_file if -e $db_file;
 
 done_testing;
