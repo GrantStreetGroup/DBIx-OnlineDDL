@@ -104,7 +104,7 @@ just like the old table, running the DDL changes (through the L</before_triggers
 copying data to the new table, and swapping the tables.  Triggers are created to keep the
 data in sync.  See L</STEP METHODS> for more information.
 
-The full operation is protected with an L<undo stack|/undo_stack> via L<Eval::Reversible>.
+The full operation is protected with an L<undo stack|/reversible> via L<Eval::Reversible>.
 If any step in the process fails, the undo stack is ran to return the DB back to normal.
 
 This module uses as many of the DBI info methods as possible, along with ANSI SQL in most
@@ -492,14 +492,14 @@ sub _fill_copy_opts {
     return $copy_opts;
 }
 
-=head3 undo_stack
+=head3 reversible
 
 A L<Eval::Reversible> object, used for rollbacks.  A default will be created, if not
 specified.
 
 =cut
 
-has undo_stack => (
+has reversible => (
     is       => 'rw',
     isa      => InstanceOf['Eval::Reversible'],
     required => 1,
@@ -755,17 +755,17 @@ protection, in case of exceptions.
 
 sub execute {
     my $self       = shift;
-    my $undo_stack = $self->undo_stack;
+    my $reversible = $self->reversible;
 
     $self->_progress_bar_setup;
 
-    $undo_stack->run_reversibly(set_subname '_execute_part_one', sub {
+    $reversible->run_reversibly(set_subname '_execute_part_one', sub {
         $self->create_new_table;
         $self->create_triggers;
         $self->copy_rows;
         $self->swap_tables;
     });
-    $undo_stack->run_reversibly(set_subname '_execute_part_two', sub {
+    $reversible->run_reversibly(set_subname '_execute_part_two', sub {
         $self->drop_old_table;
         $self->cleanup_foreign_keys;
     });
@@ -981,7 +981,7 @@ sub dbh_runner_do {
 
 You can call these methods individually, but using L</construct_and_execute> instead is
 highly recommended.  If you do run these yourself, the exception will need to be caught
-and the L</undo_stack> should be ran to get the DB back to normal.
+and the L</reversible> undo stack should be ran to get the DB back to normal.
 
 =head2 create_new_table
 
@@ -1022,7 +1022,7 @@ sub create_new_table {
     my $vars = $self->_vars;
 
     my $progress   = $vars->{progress_bar};
-    my $undo_stack = $self->undo_stack;
+    my $reversible = $self->reversible;
 
     my $orig_table_name = $self->table_name;
     my $new_table_name  = $self->new_table_name;
@@ -1069,8 +1069,8 @@ sub create_new_table {
     $self->dbh_runner_do($table_sql);
 
     # Undo commands, including a failure warning update
-    $undo_stack->failure_warning("\nDropping the new table and rolling back to start!\n\n");
-    $undo_stack->add_undo(sub { $self->dbh_runner_do("DROP TABLE $new_table_name_quote") });
+    $reversible->failure_warning("\nDropping the new table and rolling back to start!\n\n");
+    $reversible->add_undo(sub { $self->dbh_runner_do("DROP TABLE $new_table_name_quote") });
 
     $progress->update;
 }
@@ -1089,7 +1089,7 @@ sub create_triggers {
     my $vars = $self->_vars;
 
     my $progress   = $vars->{progress_bar};
-    my $undo_stack = $self->undo_stack;
+    my $reversible = $self->reversible;
 
     my $catalog         = $vars->{catalog};
     my $schema          = $vars->{schema};
@@ -1300,7 +1300,7 @@ sub create_triggers {
         # DOIT!
         $self->dbh_runner_do($trigger_sql);
 
-        $undo_stack->add_undo(sub {
+        $reversible->add_undo(sub {
             $self->dbh_runner_do( "DROP TRIGGER IF EXISTS ".$self->_vars->{trigger_names_quoted}{$trigger_type} );
         });
     }
@@ -1358,7 +1358,7 @@ sub swap_tables {
     my $vars = $self->_vars;
 
     my $progress   = $vars->{progress_bar};
-    my $undo_stack = $self->undo_stack;
+    my $reversible = $self->reversible;
 
     my $catalog         = $vars->{catalog};
     my $schema          = $vars->{schema};
@@ -1422,7 +1422,7 @@ sub swap_tables {
     # Kill the undo stack now, just in case something weird happens between now and the
     # end of the reversibly block.  We've reached a "mostly successful" state, so rolling
     # back here would be undesirable.
-    $undo_stack->clear_undo;
+    $reversible->clear_undo;
     $vars->{new_table_swapped} = 1;
 
     $progress->update;
@@ -1441,7 +1441,7 @@ sub drop_old_table {
     my $vars = $self->_vars;
 
     my $progress   = $vars->{progress_bar};
-    my $undo_stack = $self->undo_stack;
+    my $reversible = $self->reversible;
 
     my $old_table_name       = $vars->{old_table_name};
     my $old_table_name_quote = $dbh->quote_identifier($old_table_name);
@@ -1450,7 +1450,7 @@ sub drop_old_table {
 
     my $fk_hash = $vars->{foreign_keys}{definitions};
 
-    $undo_stack->failure_warning( join "\n",
+    $reversible->failure_warning( join "\n",
         '',
         "The new table has been swapped, but since the process was interrupted, foreign keys will",
         "need to be cleaned up, and the old table dropped.",
@@ -1504,7 +1504,7 @@ sub cleanup_foreign_keys {
     my $dbms_name = $vars->{dbms_name};
 
     my $progress   = $vars->{progress_bar};
-    my $undo_stack = $self->undo_stack;
+    my $reversible = $self->reversible;
 
     # SQLite doesn't need this step
     if ($dbms_name eq 'SQLite') {
@@ -1520,7 +1520,7 @@ sub cleanup_foreign_keys {
 
     my $fk_hash = $vars->{foreign_keys}{definitions};
 
-    $undo_stack->failure_warning( join "\n",
+    $reversible->failure_warning( join "\n",
         '',
         "The new table is live, but since the process was interrupted, foreign keys will need to be",
         "cleaned up.",
