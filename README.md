@@ -19,7 +19,7 @@ DBIx::OnlineDDL->construct_and_execute(
     table_name    => 'accounts',
 
     coderef_hooks => {
-        # This is the phase where the DDL is actually ran
+        # This is the phase where the DDL is actually run
         before_triggers => \&drop_foobar,
 
         # Run other operations right before the swap
@@ -86,7 +86,7 @@ copying data to the new table, and swapping the tables.  Triggers are created to
 data in sync.  See ["STEP METHODS"](#step-methods) for more information.
 
 The full operation is protected with an [undo stack](#reversible) via [Eval::Reversible](https://metacpan.org/pod/Eval::Reversible).
-If any step in the process fails, the undo stack is ran to return the DB back to normal.
+If any step in the process fails, the undo stack is run to return the DB back to normal.
 
 This module uses as many of the DBI info methods as possible, along with ANSI SQL in most
 places, to be compatible with multiple RDBMS.  So far, it will work with MySQL or SQLite,
@@ -130,6 +130,79 @@ OnlineDDL process is complete.
 
 Don't have foreign key constraints and `gh-ost` is already working for you?  Great!
 Keep using it.
+
+# PACKAGE GLOBALS
+
+Package globals are another way to introspect or control elements of the ODDL
+configuration, specifically with regard to default values or settings.  We like to keep
+our magic numbers where we can see them.
+
+Some of these values are not referenced until it comes time to make use of them, meaning
+any mid-execution alterations may have unpredictable results for running processes.
+Best practices include using `local` to automatically scope protect changes, and making
+all changes prior to instantiating/executing a `DBIx::OnlineDDL` object.
+
+### DEFAULT\_TIMEOUT\_LOCK\_FILE
+
+```perl
+# Example: Turn off file locking on NFS, which doesn's support it.  But also maybe
+# don't use on NFS if you can help it, mkay?
+local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_FILE = 0;
+```
+
+Amount of time (in seconds) to wait when attempting to acquire filesystem locks (on
+filesystems which support locking).  Float or fractional values are allowed.
+
+Default value is 1 second.
+
+### DEFAULT\_TIMEOUT\_LOCK\_DB
+
+```perl
+# Example: Maybe wait a little longer to acquire DB locks
+local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_DB = 120;
+```
+
+Amount of time (in whole seconds) to wait when attempting to acquire table and/or database
+level locks before falling back to retry (see also ["DEFAULT\_MAX\_ATTEMPTS"](#DEFAULT_MAX_ATTEMPTS).
+
+Default value is 60 seconds.
+
+### DEFAULT\_TIMEOUT\_LOCK\_ROW
+
+```perl
+# Example: Be super-aggressive about row-level DB locks:
+local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_ROW = 1;
+```
+
+Amount of time (in whole seconds) to wait when attempting to acquire row-level locks,
+which apply to much lower-level operations than ["DEFAULT\_TIMEOUT\_LOCK\_DB"](#DEFAULT_TIMEOUT_LOCK_DB).  At this
+scope the lesser of either of these settings will take precedence.
+
+Default value is 2 seconds.
+
+### DEFAULT\_TIMEOUT\_SESSION
+
+```perl
+# Example: Reduce session inactivity timeout (fail fast)
+local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_SESSION = 60;
+```
+
+Value (in whole seconds) for inactive session timeouts on the database side (definitely
+applies to MySQL, may apply to others).
+
+Default value is 28,800 seconds (8 hours).
+
+### DEFAULT\_MAX\_ATTEMPTS
+
+```perl
+# Example: Try really REALLLY hard.
+local $DBIx::OnlineDDL::DEFAULT_MAX_ATTEMPTS = 50;
+```
+
+Value for the ["dbic\_retry\_opts"](#dbic_retry_opts)'s `max_attempts` hash value, unless otherwise
+specified.
+
+Default value is 20.
 
 # ATTRIBUTES
 
@@ -201,7 +274,7 @@ from scratch.
 
 ### coderef\_hooks
 
-An hashref of coderefs.  Each of these are used in different steps in the process.  All
+A hashref of coderefs.  Each of these are used in different steps in the process.  All
 of these are optional, but it is **highly recommended** that `before_triggers` is
 specified.  Otherwise, you're not actually running any DDL and the table copy is
 essentially a no-op.
@@ -211,7 +284,7 @@ All of these triggers pass the `DBIx::OnlineDDL` object as the only argument.  T
 and ["dbh\_runner\_do"](#dbh_runner_do) methods should be used to protect against disconnections or locks.
 
 There is room to add more hooks here, but only if there's a good reason to do so.
-(Running the wrong kind of SQL at the wrong time could be dangerous.)  Create an GitHub
+(Running the wrong kind of SQL at the wrong time could be dangerous.)  Create a GitHub
 issue if you can think of one.
 
 #### before\_triggers
@@ -235,7 +308,7 @@ available.  If you use this hook, it's highly recommended that you use something
 
 ### copy\_opts
 
-An hashref of different options to pass to [DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker), which is used in the
+A hashref of different options to pass to [DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker), which is used in the
 ["copy\_rows"](#copy_rows) step.  Some of these are defined automatically.  It's recommended that you
 specify at least these options:
 
@@ -291,7 +364,7 @@ protection, in case of exceptions.
 
 ### fire\_hook
 
-```
+```perl
 $online_ddl->fire_hook('before_triggers');
 ```
 
@@ -303,7 +376,7 @@ See ["coderef\_hooks"](#coderef_hooks) for more details.
 
 ### dbh
 
-```
+```perl
 $online_ddl->dbh;
 ```
 
@@ -329,16 +402,16 @@ is honored.
 
 ### dbh\_runner\_do
 
-```
+```perl
 $online_ddl->dbh_runner_do(
     "ALTER TABLE $table_name ADD COLUMN foobar",
     ["ALTER TABLE ? DROP COLUMN ?", undef, $table_name, 'baz'],
 );
 ```
 
-Runs a list of commands, encapulating each of them in a ["dbh\_runner"](#dbh_runner) coderef with calls
+Runs a list of commands, encapsulating each of them in a ["dbh\_runner"](#dbh_runner) coderef with calls
 to ["do" in DBI](https://metacpan.org/pod/DBI#do).  This is handy when you want to run a list of DDL commands, which you don't
-care about the output of, but don't want to bundle it into a single non-idempotant
+care about the output of, but don't want to bundle them into a single non-idempotant
 repeatable coderef.  Or if you want to save typing on a single do-able SQL command.
 
 The items can either be a SQL string or an arrayref of options to pass to ["do" in DBI](https://metacpan.org/pod/DBI#do).
@@ -350,7 +423,7 @@ you should use ["dbh\_runner"](#dbh_runner) instead.
 
 You can call these methods individually, but using ["construct\_and\_execute"](#construct_and_execute) instead is
 highly recommended.  If you do run these yourself, the exception will need to be caught
-and the ["reversible"](#reversible) undo stack should be ran to get the DB back to normal.
+and the ["reversible"](#reversible) undo stack should be run to get the DB back to normal.
 
 ## create\_new\_table
 
@@ -403,7 +476,7 @@ So, tables swapped with `pt-osc` are not exactly what they used to be before the
 It also had a number of other quirks that just didn't work out for us, related to FKs and
 the amount of switches required to make it (semi-)work.
 
-Additionally, by making DBIx::OnlineDDL its own Perl module, it's a lot easier to run
+Additionally, by making `DBIx::OnlineDDL` its own Perl module, it's a lot easier to run
 Perl-based schema changes along side [DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker) without having to switch
 between Perl and CLI.  If other people want to subclass this module for their own
 environment-specific quirks, they have the power to do so, too.

@@ -12,7 +12,7 @@ use DBI::Const::GetInfoType;
 use DBIx::BatchChunker 0.92;  # with stmt attrs
 use Eval::Reversible;
 use List::Util        1.33 (qw( uniq any all ));  # has any/all/etc.
-use Sub::Util               qw< subname set_subname >;
+use Sub::Util               qw( subname set_subname );
 use Term::ProgressBar 2.14;   # with silent option
 
 use namespace::clean;  # don't export the above
@@ -39,7 +39,7 @@ version 0.90
         table_name    => 'accounts',
 
         coderef_hooks => {
-            # This is the phase where the DDL is actually ran
+            # This is the phase where the DDL is actually run
             before_triggers => \&drop_foobar,
 
             # Run other operations right before the swap
@@ -105,7 +105,7 @@ copying data to the new table, and swapping the tables.  Triggers are created to
 data in sync.  See L</STEP METHODS> for more information.
 
 The full operation is protected with an L<undo stack|/reversible> via L<Eval::Reversible>.
-If any step in the process fails, the undo stack is ran to return the DB back to normal.
+If any step in the process fails, the undo stack is run to return the DB back to normal.
 
 This module uses as many of the DBI info methods as possible, along with ANSI SQL in most
 places, to be compatible with multiple RDBMS.  So far, it will work with MySQL or SQLite,
@@ -150,6 +150,90 @@ OnlineDDL process is complete.
 Don't have foreign key constraints and C<gh-ost> is already working for you?  Great!
 Keep using it.
 
+=head1 PACKAGE GLOBALS
+
+Package globals are another way to introspect or control elements of the ODDL
+configuration, specifically with regard to default values or settings.  We like to keep
+our magic numbers where we can see them.
+
+Some of these values are not referenced until it comes time to make use of them, meaning
+any mid-execution alterations may have unpredictable results for running processes.
+Best practices include using C<local> to automatically scope protect changes, and making
+all changes prior to instantiating/executing a C<DBIx::OnlineDDL> object.
+
+=head3 DEFAULT_TIMEOUT_LOCK_FILE
+
+    # Example: Turn off file locking on NFS, which doesn's support it.  But also maybe
+    # don't use on NFS if you can help it, mkay?
+    local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_FILE = 0;
+
+Amount of time (in seconds) to wait when attempting to acquire filesystem locks (on
+filesystems which support locking).  Float or fractional values are allowed.  Mostly
+applies to SQLite.
+
+Default value is 1 second.
+
+=cut
+
+our $DEFAULT_TIMEOUT_LOCK_FILE = 1;
+
+=head3 DEFAULT_TIMEOUT_LOCK_DB
+
+    # Example: Maybe wait a little longer to acquire DB locks
+    local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_DB = 120;
+
+Amount of time (in whole seconds) to wait when attempting to acquire table and/or database
+level locks before falling back to retry.  See also L</DEFAULT_MAX_ATTEMPTS>.
+
+Default value is 60 seconds.
+
+=cut
+
+our $DEFAULT_TIMEOUT_LOCK_DB = 60;
+
+=head3 DEFAULT_TIMEOUT_LOCK_ROW
+
+    # Example: Be super-aggressive about row-level DB locks:
+    local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_ROW = 1;
+
+Amount of time (in whole seconds) to wait when attempting to acquire row-level locks,
+which apply to much lower-level operations than L</DEFAULT_TIMEOUT_LOCK_DB>.  At this
+scope the lesser of either of these two settings will take precedence.
+
+Default value is 2 seconds.
+
+=cut
+
+our $DEFAULT_TIMEOUT_LOCK_ROW = 2;
+
+=head3 DEFAULT_TIMEOUT_SESSION
+
+    # Example: Reduce session inactivity timeout (fail fast)
+    local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_SESSION = 60;
+
+Value (in whole seconds) for inactive session timeouts on the database side (definitely
+applies to MySQL, may apply to others).
+
+Default value is 28_800 seconds (8 hours).
+
+=cut
+
+our $DEFAULT_TIMEOUT_SESSION = 28_800;
+
+=head3 DEFAULT_MAX_ATTEMPTS
+
+    # Example: Try really REALLLY hard.
+    local $DBIx::OnlineDDL::DEFAULT_MAX_ATTEMPTS = 50;
+
+Value for the L</dbic_retry_opts>'s C<max_attempts> hash value, unless otherwise
+specified.
+
+Default value is 20.
+
+=cut
+
+our $DEFAULT_MAX_ATTEMPTS = 20;
+
 =head1 ATTRIBUTES
 
 =head2 DBIC Attributes
@@ -174,7 +258,7 @@ has rsrc => (
 
 A hashref of DBIC retry options.  These options control how retry protection works within
 DBIC.  Right now, this is just limited to C<max_attempts>, which controls the number of
-times to retry.  The default is 20.
+times to retry.  See also L</DEFAULT_MAX_ATTEMPTS>.
 
 =cut
 
@@ -327,7 +411,7 @@ has progress_name => (
 
 =head3 coderef_hooks
 
-An hashref of coderefs.  Each of these are used in different steps in the process.  All
+A hashref of coderefs.  Each of these are used in different steps in the process.  All
 of these are optional, but it is B<highly recommended> that C<before_triggers> is
 specified.  Otherwise, you're not actually running any DDL and the table copy is
 essentially a no-op.
@@ -337,7 +421,7 @@ L</new_table_name> can be acquired from that and used in SQL statements.  The L<
 and L</dbh_runner_do> methods should be used to protect against disconnections or locks.
 
 There is room to add more hooks here, but only if there's a good reason to do so.
-(Running the wrong kind of SQL at the wrong time could be dangerous.)  Create an GitHub
+(Running the wrong kind of SQL at the wrong time could be dangerous.)  Create a GitHub
 issue if you can think of one.
 
 =head4 before_triggers
@@ -371,7 +455,7 @@ has coderef_hooks => (
 
 =head3 copy_opts
 
-An hashref of different options to pass to L<DBIx::BatchChunker>, which is used in the
+A hashref of different options to pass to L<DBIx::BatchChunker>, which is used in the
 L</copy_rows> step.  Some of these are defined automatically.  It's recommended that you
 specify at least these options:
 
@@ -392,7 +476,7 @@ has copy_opts => (
 );
 
 # This is filled in during copy_rows, since the _column_list call needs to happen after
-# the DDL has ran.
+# the DDL has run.
 sub _fill_copy_opts {
     my $self = shift;
     my $rsrc = $self->rsrc;
@@ -429,7 +513,7 @@ sub _fill_copy_opts {
         $copy_opts->{rsc} //= $rsrc->resultset->get_column($id_name);
 
         $copy_opts->{dbic_retry_opts} //= {};
-        $copy_opts->{dbic_retry_opts}{max_attempts}  //= 20;
+        $copy_opts->{dbic_retry_opts}{max_attempts}  //= $DEFAULT_MAX_ATTEMPTS;
         $copy_opts->{dbic_retry_opts}{retry_handler}   = sub { $self->_retry_handler(@_) };
     }
     else {
@@ -654,7 +738,7 @@ sub BUILD {
         $conn->retry_handler(sub { $self->_retry_handler(@_) });
 
         # And max_attempts.  XXX: Maybe they actually wanted 10 and not just the default?
-        $conn->max_attempts(20) if $conn->max_attempts == 10;
+        $conn->max_attempts($DEFAULT_MAX_ATTEMPTS) if $conn->max_attempts == 10;
     }
 
     # Go ahead and run the post-connection statements for this session
@@ -680,15 +764,15 @@ sub _post_connection_stmts {
             'SET SESSION foreign_key_checks=0',
 
             # Wait timeout for activity.  This is the MySQL default.
-            'SET SESSION wait_timeout=28800',
+            'SET SESSION wait_timeout='.int($DEFAULT_TIMEOUT_SESSION),
 
             # Wait 60 seconds for any locks, and retry with the retry_handler.  That'll give us
             # 20 minutes to wait for locks.
-            'SET SESSION lock_wait_timeout=60',
+            'SET SESSION lock_wait_timeout='.int($DEFAULT_TIMEOUT_LOCK_DB),
 
             # Only wait 2 seconds for InnoDB row lock wait timeouts, so that OnlineDDL is more
             # likely to be the victim of lock contention.
-            'SET SESSION innodb_lock_wait_timeout=2',
+            'SET SESSION innodb_lock_wait_timeout='.int($DEFAULT_TIMEOUT_LOCK_ROW),
         );
     }
     elsif ($dbms_name eq 'SQLite') {
@@ -700,7 +784,7 @@ sub _post_connection_stmts {
             # Only wait 1 second for file contentions.  The downside is that the default is
             # actually 0, so other (non-OnlineDDL) connections should have a setting that is more
             # than that.
-            'PRAGMA busy_timeout = 1000',
+            'PRAGMA busy_timeout = '.(int($DEFAULT_TIMEOUT_LOCK_FILE)*1_000),
         );
     }
 
@@ -850,17 +934,17 @@ sub _retry_handler {
     if    ($dbms_name eq 'MySQL') {
         $is_retryable = $error =~ m<
             # Locks
-            (?-x:Deadlock found)|
-            (?-x:WSREP detected deadlock\/conflict)|
-            (?-x:Lock wait timeout exceeded)|
+            (?-x:deadlock found)|
+            (?-x:wsrep detected deadlock/conflict)|
+            (?-x:lock wait timeout exceeded)|
 
             # Connections
-            (?-x:MySQL server has gone away)|
-            (?-x:Lost connection to MySQL server)|
+            (?-x:mysql server has gone away)|
+            (?-x:Lost connection to mysql server)|
 
             # Queries
-            (?-x:Query execution was interrupted)
-        >x;
+            (?-x:query execution was interrupted)
+        >xi;
     }
     elsif ($dbms_name eq 'SQLite') {
         $is_retryable = $error =~ m<
@@ -911,7 +995,7 @@ sub dbh_runner {
         # this method.
         my $block_runner = DBIx::Class::Storage::BlockRunner->new(
             # defaults
-            max_attempts => 20,
+            max_attempts => $DEFAULT_MAX_ATTEMPTS,
 
             # never overrides the important ones below
             %{ $self->dbic_retry_opts },
@@ -952,9 +1036,9 @@ sub dbh_runner {
         ["ALTER TABLE ? DROP COLUMN ?", undef, $table_name, 'baz'],
     );
 
-Runs a list of commands, encapulating each of them in a L</dbh_runner> coderef with calls
+Runs a list of commands, encapsulating each of them in a L</dbh_runner> coderef with calls
 to L<DBI/do>.  This is handy when you want to run a list of DDL commands, which you don't
-care about the output of, but don't want to bundle it into a single non-idempotant
+care about the output of, but don't want to bundle them into a single non-idempotant
 repeatable coderef.  Or if you want to save typing on a single do-able SQL command.
 
 The items can either be a SQL string or an arrayref of options to pass to L<DBI/do>.
@@ -981,7 +1065,7 @@ sub dbh_runner_do {
 
 You can call these methods individually, but using L</construct_and_execute> instead is
 highly recommended.  If you do run these yourself, the exception will need to be caught
-and the L</reversible> undo stack should be ran to get the DB back to normal.
+and the L</reversible> undo stack should be run to get the DB back to normal.
 
 =head2 create_new_table
 
