@@ -6,7 +6,8 @@ our $VERSION   = '0.90';
 use v5.10;
 use Moo;
 
-use Types::Standard qw( Str Num Bool HashRef CodeRef InstanceOf Dict Optional );
+use Types::Standard        qw( Str Bool HashRef CodeRef InstanceOf Dict Optional );
+use Types::Common::Numeric qw( PositiveNum PositiveInt );
 
 use DBI::Const::GetInfoType;
 use DBIx::BatchChunker 0.92;  # with stmt attrs
@@ -151,76 +152,6 @@ OnlineDDL process is complete.
 
 Don't have foreign key constraints and C<gh-ost> is already working for you?  Great!
 Keep using it.
-
-=head1 PACKAGE GLOBALS
-
-Package globals are another way to introspect or control elements of the ODDL
-configuration, specifically with regard to default values or settings.  We like to keep
-our magic numbers where we can see them.
-
-Some of these values are not referenced until it comes time to make use of them, meaning
-any mid-execution alterations may have unpredictable results for running processes.
-Best practices include using C<local> to automatically scope protect changes, and making
-all changes prior to instantiating/executing a C<DBIx::OnlineDDL> object.
-
-=head3 DEFAULT_TIMEOUT_LOCK_FILE
-
-    # Example: Turn off file locking on NFS, which doesn's support it.  But also maybe
-    # don't use on NFS if you can help it, mkay?
-    local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_FILE = 0;
-
-Amount of time (in seconds) to wait when attempting to acquire filesystem locks (on
-filesystems which support locking).  Float or fractional values are allowed.  Mostly
-applies to SQLite.
-
-Default value is 1 second.
-
-=cut
-
-our $DEFAULT_TIMEOUT_LOCK_FILE = 1;
-
-=head3 DEFAULT_TIMEOUT_LOCK_DB
-
-    # Example: Maybe wait a little longer to acquire DB locks
-    local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_DB = 120;
-
-Amount of time (in whole seconds) to wait when attempting to acquire table and/or database
-level locks before falling back to retry.  See also L</DEFAULT_MAX_ATTEMPTS>.
-
-Default value is 60 seconds.
-
-=cut
-
-our $DEFAULT_TIMEOUT_LOCK_DB = 60;
-
-=head3 DEFAULT_TIMEOUT_LOCK_ROW
-
-    # Example: Be super-aggressive about row-level DB locks:
-    local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_ROW = 1;
-
-Amount of time (in whole seconds) to wait when attempting to acquire row-level locks,
-which apply to much lower-level operations than L</DEFAULT_TIMEOUT_LOCK_DB>.  At this
-scope the lesser of either of these two settings will take precedence.
-
-Default value is 2 seconds.
-
-=cut
-
-our $DEFAULT_TIMEOUT_LOCK_ROW = 2;
-
-=head3 DEFAULT_TIMEOUT_SESSION
-
-    # Example: Reduce session inactivity timeout (fail fast)
-    local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_SESSION = 60;
-
-Value (in whole seconds) for inactive session timeouts on the database side (definitely
-applies to MySQL, may apply to others).
-
-Default value is 28_800 seconds (8 hours).
-
-=cut
-
-our $DEFAULT_TIMEOUT_SESSION = 28_800;
 
 =head1 ATTRIBUTES
 
@@ -564,6 +495,57 @@ sub _fill_copy_opts {
     return $copy_opts;
 }
 
+=head3 db_timeouts
+
+A hashref of timeouts used for various DB operations, and usually set at the beginning of
+each connection.  Some of these settings may be RDBMS-specific.
+
+=head4 lock_file
+
+Amount of time (in seconds) to wait when attempting to acquire filesystem locks (on
+filesystems which support locking).  Float or fractional values are allowed.  This
+currently only applies to SQLite.
+
+Default value is 1 second.  The downside is that the SQLite default is actually 0, so
+other (non-OnlineDDL) connections should have a setting that is more than that to prevent
+lock contention.
+
+=head4 lock_db
+
+Amount of time (in whole seconds) to wait when attempting to acquire table and/or database
+level locks before falling back to retry.
+
+Default value is 60 seconds.
+
+=head4 lock_row
+
+Amount of time (in whole seconds) to wait when attempting to acquire row-level locks,
+which apply to much lower-level operations than L</lock_db>.  At this scope, the lesser
+of either of these two settings will take precedence.
+
+Default value is 2 seconds.  Lower values are preferred for row lock wait timeouts, so
+that OnlineDDL is more likely to be the victim of lock contention.  OnlineDDL can simply
+retry the connection at that point.
+
+=head4 session
+
+Amount of time (in whole seconds) for inactive session timeouts on the database side.
+
+Default value is 28,800 seconds (8 hours), which is MySQL's default.
+
+=cut
+
+has db_timeouts => (
+    is       => 'ro',
+    isa      => Dict[
+        lock_file => Optional[PositiveNum],
+        lock_db   => Optional[PositiveInt],
+        lock_row  => Optional[PositiveInt],
+        session   => Optional[PositiveInt],
+    ],
+    required => 0,
+);
+
 =head3 reversible
 
 A L<Eval::Reversible> object, used for rollbacks.  A default will be created, if not
@@ -598,6 +580,14 @@ around BUILDARGS => sub {
     die 'A DBIC ResultSource (rsrc) or DBIx::Connector::Retry object (dbi_connector) is required' unless (
         $args{rsrc} || $args{dbi_connector}
     );
+
+    # Defaults for db_timeouts (see POD above).  We set these here, because each
+    # individual timeout should be checked to see if it's defined.
+    $args{db_timeouts} //= {};
+    $args{db_timeouts}{lock_file} //= 1;
+    $args{db_timeouts}{lock_db}   //= 60;
+    $args{db_timeouts}{lock_row}  //= 2;
+    $args{db_timeouts}{session}   //= 28_800;
 
     $class->$next( %args );
 };
@@ -739,7 +729,8 @@ sub _post_connection_stmts {
     my $self = shift;
     my @stmts;
 
-    my $dbms_name = $self->_vars->{dbms_name};
+    my $dbms_name   = $self->_vars->{dbms_name};
+    my $db_timeouts = $self->db_timeouts;
 
     if    ($dbms_name eq 'MySQL') {
         @stmts = (
@@ -751,16 +742,10 @@ sub _post_connection_stmts {
             # to turn into a long-running operation on pre-existing tables.
             'SET SESSION foreign_key_checks=0',
 
-            # Wait timeout for activity.  This is the MySQL default.
-            'SET SESSION wait_timeout='.int($DEFAULT_TIMEOUT_SESSION),
-
-            # Wait 60 seconds for any locks, and retry with the retry_handler.  That'll give us
-            # 20 minutes to wait for locks.
-            'SET SESSION lock_wait_timeout='.int($DEFAULT_TIMEOUT_LOCK_DB),
-
-            # Only wait 2 seconds for InnoDB row lock wait timeouts, so that OnlineDDL is more
-            # likely to be the victim of lock contention.
-            'SET SESSION innodb_lock_wait_timeout='.int($DEFAULT_TIMEOUT_LOCK_ROW),
+            # DB timeouts
+            'SET SESSION wait_timeout='.$db_timeouts->{session},
+            'SET SESSION lock_wait_timeout='.$db_timeouts->{lock_db},
+            'SET SESSION innodb_lock_wait_timeout='.$db_timeouts->{lock_row},
         );
     }
     elsif ($dbms_name eq 'SQLite') {
@@ -769,10 +754,8 @@ sub _post_connection_stmts {
             # feature, so this is always a "session" command.
             'PRAGMA foreign_keys = OFF',
 
-            # Only wait 1 second for file contentions.  The downside is that the default is
-            # actually 0, so other (non-OnlineDDL) connections should have a setting that is more
-            # than that.
-            'PRAGMA busy_timeout = '.(int($DEFAULT_TIMEOUT_LOCK_FILE)*1_000),
+            # DB timeouts
+            'PRAGMA busy_timeout = '.int($db_timeouts->{lock_file} * 1_000),  # busy_timeout uses ms
         );
     }
 
