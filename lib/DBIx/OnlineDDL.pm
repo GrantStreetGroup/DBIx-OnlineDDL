@@ -17,6 +17,8 @@ use Term::ProgressBar 2.14;   # with silent option
 
 use namespace::clean;  # don't export the above
 
+my $DEFAULT_MAX_ATTEMPTS = 20;
+
 =encoding utf8
 
 =head1 NAME
@@ -220,20 +222,6 @@ Default value is 28_800 seconds (8 hours).
 
 our $DEFAULT_TIMEOUT_SESSION = 28_800;
 
-=head3 DEFAULT_MAX_ATTEMPTS
-
-    # Example: Try really REALLLY hard.
-    local $DBIx::OnlineDDL::DEFAULT_MAX_ATTEMPTS = 50;
-
-Value for the L</dbic_retry_opts>'s C<max_attempts> hash value, unless otherwise
-specified.
-
-Default value is 20.
-
-=cut
-
-our $DEFAULT_MAX_ATTEMPTS = 20;
-
 =head1 ATTRIBUTES
 
 =head2 DBIC Attributes
@@ -258,7 +246,7 @@ has rsrc => (
 
 A hashref of DBIC retry options.  These options control how retry protection works within
 DBIC.  Right now, this is just limited to C<max_attempts>, which controls the number of
-times to retry.  See also L</DEFAULT_MAX_ATTEMPTS>.
+times to retry.  The default C<max_attempts> is 20.
 
 =cut
 
@@ -281,8 +269,8 @@ within the object.
 Required, except for DBIC users, who should be setting L</rsrc> above.  It is also
 assumed that the correct database is already active.
 
-The object will be tweaked to ensure sane defaults, proper post-connection details, and
-a custom C<retry_handler>.
+The object will be tweaked to ensure sane defaults, proper post-connection details, a
+custom C<retry_handler>, and set a default C<max_attempts> of 20, if not already set.
 
 =cut
 
