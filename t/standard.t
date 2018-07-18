@@ -86,6 +86,7 @@ sub onlineddl_test ($&) {
             return unless $row;
 
             my $method = (caller(2))[3];
+            $method = (caller(3))[3] if $method eq 'DBIx::OnlineDDL::Helper::Base::dbh';
 
             # INSERT
             my $cdid = $row->get_column('cd');
@@ -144,7 +145,7 @@ sub onlineddl_test ($&) {
 
             # Try to eliminate the connection, to simulate a flakey connection
             $dc_count++;
-            unless ($method =~ /(?:BUILD|_post_connection_stmts)$/ || $dc_count % 3) {
+            unless ($method =~ /(?:BUILD|post_connection_stmts|_build_helper|current_catalog_schema)$/ || $dc_count % 3) {
                 if ($dbms_name eq 'MySQL') {
                     eval { $dbh->do('KILL CONNECTION CONNECTION_ID()') };
                 }
@@ -207,15 +208,17 @@ onlineddl_test 'No-op copy' => sub {
     is $online_ddl->table_name,     'track',      'Figured out table_name';
     is $online_ddl->new_table_name, '_track_new', 'Figured out new_table_name';
 
-    my $orig_table_track_sql  = $online_ddl->_create_table_sql('track');
-    my $orig_table_lyrics_sql = $online_ddl->_create_table_sql('lyrics');  # has FK pointing to track
+    my $helper = $online_ddl->_helper;
+
+    my $orig_table_track_sql  = $helper->create_table_sql('track');
+    my $orig_table_lyrics_sql = $helper->create_table_sql('lyrics');  # has FK pointing to track
 
     try_ok { $online_ddl->execute } 'Execute works';
 
     is $online_ddl->copy_opts->{id_name}, 'trackid', 'Figured out PK';
 
-    my $new_table_track_sql  = $online_ddl->_create_table_sql('track');
-    my $new_table_lyrics_sql = $online_ddl->_create_table_sql('lyrics');
+    my $new_table_track_sql  = $helper->create_table_sql('track');
+    my $new_table_lyrics_sql = $helper->create_table_sql('lyrics');
 
     # Remove AUTO_INCREMENT information
     $orig_table_track_sql  =~ s/ AUTO_INCREMENT=\K\d+/###/;

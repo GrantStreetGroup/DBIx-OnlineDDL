@@ -9,6 +9,7 @@ use Moo;
 use Types::Standard        qw( Str Bool HashRef CodeRef InstanceOf Dict Optional );
 use Types::Common::Numeric qw( PositiveNum PositiveInt );
 
+use Class::Load;
 use DBI::Const::GetInfoType;
 use DBIx::BatchChunker 0.92;  # with stmt attrs
 use Eval::Reversible;
@@ -113,7 +114,7 @@ If any step in the process fails, the undo stack is run to return the DB back to
 This module uses as many of the DBI info methods as possible, along with ANSI SQL in most
 places, to be compatible with multiple RDBMS.  So far, it will work with MySQL or SQLite,
 but can be expanded to include more systems with a relatively small amount of code
-changes.
+changes.  (See L<DBIx::OnlineDDL::Helper::Base> for details.)
 
 B<DISCLAIMER:> You should not rely on this class to magically fix any and all locking
 problems the DB might experience just because it's being used.  Thorough testing and
@@ -403,6 +404,7 @@ sub _fill_copy_opts {
     my $vars = $self->_vars;
 
     my $copy_opts = $self->copy_opts;
+    my $helper    = $self->_helper;
 
     my $catalog         = $vars->{catalog};
     my $schema          = $vars->{schema};
@@ -411,8 +413,6 @@ sub _fill_copy_opts {
 
     my $orig_table_name_quote = $dbh->quote_identifier($orig_table_name);
     my $new_table_name_quote  = $dbh->quote_identifier($new_table_name);
-
-    my $dbms_name = $self->_vars->{dbms_name};
 
     # Figure out what the id_name is going to be
     my $id_name = $copy_opts->{id_name} //= $self->dbh_runner(run => set_subname '_pk_finder', sub {
@@ -446,46 +446,7 @@ sub _fill_copy_opts {
 
     # The INSERT..SELECT is a bit different depending on the RDBMS used, mostly because
     # of the IGNORE part
-    my $insert_select_stmt;
-    if    ($dbms_name eq 'MySQL') {
-        $insert_select_stmt = join("\n",
-            "INSERT IGNORE INTO $new_table_name_quote",
-            "    ($column_list_str)",
-            "SELECT",
-            "    $column_list_str",
-            "FROM $orig_table_name_quote",
-            "WHERE $id_name_quote BETWEEN ? AND ?",
-            "LOCK IN SHARE MODE"
-        );
-    }
-    elsif ($dbms_name eq 'SQLite') {
-        $insert_select_stmt = join("\n",
-            "INSERT OR IGNORE INTO $new_table_name_quote",
-            "    ($column_list_str)",
-            "SELECT",
-            "    $column_list_str",
-            "FROM $orig_table_name_quote",
-            "WHERE $id_name_quote BETWEEN ? AND ?",
-        );
-    }
-    else {
-        # Fallback to a generic JOIN solution
-        my $old_full_id_name_quote = $dbh->quote_identifier(undef, $orig_table_name, $id_name);
-        my $new_full_id_name_quote = $dbh->quote_identifier(undef, $new_table_name,  $id_name);
-
-        $insert_select_stmt = join("\n",
-            "INSERT INTO $new_table_name_quote",
-            "($column_list_str)",
-            "SELECT",
-            "    $column_list_str",
-            "FROM",
-            "    $orig_table_name_quote",
-            "    LEFT JOIN $new_table_name_quote ON (".join(" = ", $old_full_id_name_quote, $new_full_id_name_quote).")",
-            "WHERE",
-            "    $old_full_id_name_quote BETWEEN ? AND ? AND",
-            "    $new_full_id_name_quote IS NULL",
-        );
-    }
+    my $insert_select_stmt = $helper->insert_select_stmt($column_list_str);
 
     $copy_opts->{count_stmt} //= "SELECT COUNT(*) FROM $orig_table_name_quote WHERE $id_name_quote BETWEEN ? AND ?";
     $copy_opts->{stmt}       //= $insert_select_stmt;
@@ -561,6 +522,8 @@ has reversible => (
     default  => sub { Eval::Reversible->new },
 );
 
+### Private attributes
+
 has _vars => (
     is       => 'rw',
     isa      => HashRef,
@@ -569,6 +532,34 @@ has _vars => (
     lazy     => 1,
     default  => sub { {} },
 );
+
+has _helper => (
+    is       => 'ro',
+    isa      => InstanceOf['DBIx::OnlineDDL::Helper::Base'],
+    required => 0,
+    init_arg => undef,
+    lazy     => 1,
+    builder  => '_build_helper',
+);
+
+sub _build_helper {
+    my $self = shift;
+
+    my $dbh = $self->dbh;
+
+    # Get and store the DBMS_NAME.  This is not the lowercase driver name (ie: mysql),
+    # unless the {Driver}{Name} alternative wins out.
+    my $dbms_name = $self->_vars->{dbms_name} = $dbh->get_info( $GetInfoType{SQL_DBMS_NAME} ) // $dbh->{Driver}->{Name};
+
+    my $helper_class = "DBIx::OnlineDDL::Helper::$dbms_name";
+
+    # Die if we can't load the RDBMS-specific class, since there's a lot of gaps in Base
+    die "OnlineDDL is not designed for $dbms_name systems yet!" unless Class::Load::load_optional_class($helper_class);
+
+    return $helper_class->new( online_ddl => $self );
+}
+
+### BUILD methods
 
 around BUILDARGS => sub {
     my $next  = shift;
@@ -596,34 +587,17 @@ sub BUILD {
     my $self = shift;
     my $rsrc = $self->rsrc;
 
-    my $dbh = $self->dbh;
+    my $dbh    = $self->dbh;
+    my $helper = $self->_helper;
 
     # Get the current catalog/schema
-    my $dbms_name = $self->_vars->{dbms_name} = $dbh->get_info( $GetInfoType{SQL_DBMS_NAME} );
-
-    my $catalog;
-    my $schema;
-    if    ($dbms_name eq 'MySQL') {
-        $catalog = undef;
-        ($schema) = $dbh->selectrow_array('SELECT DATABASE()');
-    }
-    elsif ($dbms_name eq 'SQLite') {
-        $catalog = undef;
-        my $databases = $dbh->selectall_hashref('PRAGMA database_list', 'seq');
-        $schema = $databases->{0}{name};
-    }
-    else {
-        # Try to guess from the DSN parameters
-        my %dsn = map { /^(.+)=(.+)$/; lc($1) => $2; } (split /\;/, $dbh->{Name});
-        $catalog = $dsn{catalog};
-        $schema  = $dsn{database} // $dsn{schema};
-    }
+    my ($catalog, $schema) = $helper->current_catalog_schema;
 
     $self->_vars->{catalog} = $catalog;
     $self->_vars->{schema}  = $schema;
 
     # Add in the post-connection details
-    my @stmts = $self->_post_connection_stmts;
+    my @stmts = $helper->post_connection_stmts;
 
     if ($rsrc) {
         ### DBIC Storage
@@ -723,43 +697,6 @@ sub BUILD {
     $dbh->{AutoCommit} = 1;
     $dbh->{RaiseError} = 1;
     $dbh->do($_) for @stmts;
-}
-
-sub _post_connection_stmts {
-    my $self = shift;
-    my @stmts;
-
-    my $dbms_name   = $self->_vars->{dbms_name};
-    my $db_timeouts = $self->db_timeouts;
-
-    if    ($dbms_name eq 'MySQL') {
-        @stmts = (
-            # Use the right database, just in case it's not in the DSN.
-            "USE ".$self->dbh->quote_identifier($self->_vars->{schema}),
-
-            # Foreign key constraints should not interrupt the process.  Nor should they be
-            # checked when trying to add or remove them.  This would cause a simple FK DDL
-            # to turn into a long-running operation on pre-existing tables.
-            'SET SESSION foreign_key_checks=0',
-
-            # DB timeouts
-            'SET SESSION wait_timeout='.$db_timeouts->{session},
-            'SET SESSION lock_wait_timeout='.$db_timeouts->{lock_db},
-            'SET SESSION innodb_lock_wait_timeout='.$db_timeouts->{lock_row},
-        );
-    }
-    elsif ($dbms_name eq 'SQLite') {
-        @stmts = (
-            # See FK comment in MySQL section.  FKs in SQLite are a per-connection enabled
-            # feature, so this is always a "session" command.
-            'PRAGMA foreign_keys = OFF',
-
-            # DB timeouts
-            'PRAGMA busy_timeout = '.int($db_timeouts->{lock_file} * 1_000),  # busy_timeout uses ms
-        );
-    }
-
-    return @stmts;
 }
 
 =head1 CONSTRUCTORS
@@ -894,46 +831,8 @@ sub _retry_handler {
     # NOTE: There's a lot of abusing the fact that BlockRunner and DBIx::Connector::Retry
     # (a la $runner) share similar accessor interfaces.
 
-    my $error     = $runner->last_exception;
-    my $dbms_name = $vars->{dbms_name};
-
-    my $is_retryable = 0;
-
-    # Locks/timeouts/etc. problems should still force a retry, so check for these kind of
-    # errors.  Disable /x flag to allow for whitespace within string, but turn it on for
-    # newlines and comments.
-    if    ($dbms_name eq 'MySQL') {
-        $is_retryable = $error =~ m<
-            # Locks
-            (?-x:deadlock found)|
-            (?-x:wsrep detected deadlock/conflict)|
-            (?-x:lock wait timeout exceeded)|
-
-            # Connections
-            (?-x:mysql server has gone away)|
-            (?-x:Lost connection to mysql server)|
-
-            # Queries
-            (?-x:query execution was interrupted)
-        >xi;
-    }
-    elsif ($dbms_name eq 'SQLite') {
-        $is_retryable = $error =~ m<
-            # Locks
-            (?-x:database( table)? is locked)|
-
-            # Connections
-            (?-x:attempt to [\w\s]+ on inactive database handle)|
-
-            # Queries
-            (?-x:query aborted)|
-            (?-x:interrupted)
-        >xi;
-    }
-    else {
-        warn "Not sure how to inspect DB errors for $dbms_name systems!";
-        return 0;
-    }
+    my $error        = $runner->last_exception;
+    my $is_retryable = $self->_helper->is_error_retryable($error);
 
     if ($is_retryable) {
         my $progress = $vars->{progress_bar};
@@ -1045,32 +944,6 @@ as possible.
 
 =cut
 
-sub _create_table_sql {
-    my $self  = shift;
-    my $table = shift;
-    my $dbh   = $self->dbh;
-    my $vars  = $self->_vars;
-
-    my $qtable = $dbh->quote_identifier($table);
-
-    my $dbms_name = $vars->{dbms_name};
-    my $create_sql;
-    $self->dbh_runner(run => set_subname '_get_create_table_sql', sub {
-        $dbh = $_;
-        if    ($dbms_name eq 'MySQL') {
-            $create_sql = $dbh->selectrow_hashref("SHOW CREATE TABLE $qtable")->{'Create Table'};
-        }
-        elsif ($dbms_name eq 'SQLite') {
-            ($create_sql) = $dbh->selectrow_array('SELECT sql FROM sqlite_master WHERE name = ?', undef, $table);
-        }
-        else {
-            die "Not sure how to create a new table for $dbms_name systems!";
-        }
-    });
-
-    return $create_sql;
-}
-
 sub create_new_table {
     my $self = shift;
     my $dbh  = $self->dbh;
@@ -1078,6 +951,7 @@ sub create_new_table {
 
     my $progress   = $vars->{progress_bar};
     my $reversible = $self->reversible;
+    my $helper     = $self->_helper;
 
     my $orig_table_name = $self->table_name;
     my $new_table_name  = $self->new_table_name;
@@ -1085,36 +959,12 @@ sub create_new_table {
     my $orig_table_name_quote = $dbh->quote_identifier($orig_table_name);
     my $new_table_name_quote  = $dbh->quote_identifier($new_table_name);
 
-    my $dbms_name = $vars->{dbms_name};
-
     $progress->message("Creating new table $new_table_name");
 
-    my $table_sql = $self->_create_table_sql($orig_table_name);
+    my $table_sql = $helper->create_table_sql($orig_table_name);
     die "Table $orig_table_name does not exist in the database!" unless $table_sql;
 
-    if    ($dbms_name eq 'MySQL') {
-        # Since MySQL uses a global namespace for foreign keys, these will have to be renamed
-        my $iqre = $dbh->get_info( $GetInfoType{SQL_IDENTIFIER_QUOTE_CHAR} ) || '`';
-        $iqre = quotemeta $iqre;
-
-        my @fk_names;
-        push @fk_names, $1 for ($table_sql =~ /CONSTRAINT ${iqre}([^$iqre\s]+)${iqre} FOREIGN KEY/i);
-
-        foreach my $fk_name (@fk_names) {
-            my $new_fk_name = $self->_find_new_identifier(
-                "_${fk_name}" => set_subname '_fk_name_finder', sub {
-                    $_[0]->selectrow_array(
-                        'SELECT table_name FROM information_schema.key_column_usage WHERE constraint_schema = DATABASE() AND constraint_name = ?',
-                        undef, $_[1]
-                    );
-                },
-            );
-            $vars->{foreign_keys}{orig_names}{"$orig_table_name.$new_fk_name"} = $fk_name;
-
-            my $fk_name_re = quotemeta $fk_name;
-            $table_sql =~ s/(?<=CONSTRAINT ${iqre})$fk_name_re(?=${iqre} FOREIGN KEY)/$new_fk_name/;
-        }
-    }
+    $table_sql = $helper->rename_fks_in_table_sql($orig_table_name, $table_sql) if $helper->dbms_uses_global_fk_namespace;
 
     # Change the old->new table name
     my $orig_table_name_quote_re = '('.quotemeta($orig_table_name_quote).'|'.quotemeta($orig_table_name).')';
@@ -1145,13 +995,12 @@ sub create_triggers {
 
     my $progress   = $vars->{progress_bar};
     my $reversible = $self->reversible;
+    my $helper     = $self->_helper;
 
     my $catalog         = $vars->{catalog};
     my $schema          = $vars->{schema};
     my $orig_table_name = $self->table_name;
     my $new_table_name  = $self->new_table_name;
-
-    my $dbms_name = $vars->{dbms_name};
 
     # Fire the before_triggers hook, which would typically include the DDL
     $self->fire_hook('before_triggers');
@@ -1208,55 +1057,14 @@ sub create_triggers {
 
     ### Check to make sure existing triggers aren't on the table
 
-    my @has_triggers_on_table = $self->dbh_runner(run => set_subname '_has_triggers_check', sub {
-        $dbh = $_;
-
-        if    ($dbms_name eq 'MySQL') {
-            return $dbh->selectrow_array(
-                'SELECT trigger_name FROM information_schema.triggers WHERE event_object_schema = DATABASE() AND event_object_table = ?',
-                undef, $orig_table_name
-            );
-        }
-        elsif ($dbms_name eq 'SQLite') {
-            return $dbh->selectrow_array(
-                'SELECT name FROM sqlite_master WHERE type = ? AND tbl_name = ?',
-                undef, 'trigger', $orig_table_name
-            );
-        }
-        else {
-            die "Not sure how to check for table triggers for $dbms_name systems!";
-        }
-    });
-
     die "Found triggers on $orig_table_name!  Please remove them first, so that our INSERT/UPDATE/DELETE triggers can be applied."
-        if @has_triggers_on_table;
+        if $helper->has_triggers_on_table($orig_table_name);
 
     ### Find a good set of trigger names
 
-    my $trigger_finder_sub;
-    if    ($dbms_name eq 'MySQL') {
-        $trigger_finder_sub = set_subname '_trigger_finder_mysql', sub {
-            $_[0]->selectrow_array(
-                'SELECT trigger_name FROM information_schema.triggers WHERE trigger_schema = DATABASE() AND trigger_name = ?',
-                undef, $_[1]
-            );
-        };
-    }
-    elsif ($dbms_name eq 'SQLite') {
-        $trigger_finder_sub = set_subname '_trigger_finder_sqlite', sub {
-            $_[0]->selectrow_array(
-                'SELECT name FROM sqlite_master WHERE type = ? AND name = ?',
-                undef, 'trigger', $_[1]
-            );
-        };
-    }
-    else {
-        die "Not sure how to check for table triggers for $dbms_name systems!";
-    }
-
     foreach my $trigger_type (qw< INSERT UPDATE DELETE >) {
-        my $trigger_name = $self->_find_new_identifier(
-            "${orig_table_name}_onlineddl_".lc($trigger_type) => $trigger_finder_sub
+        my $trigger_name = $helper->find_new_trigger_identifier(
+            "${orig_table_name}_onlineddl_".lc($trigger_type)
         );
         $vars->{trigger_names}       {$trigger_type} = $trigger_name;
         $vars->{trigger_names_quoted}{$trigger_type} = $dbh->quote_identifier($trigger_name);
@@ -1270,8 +1078,11 @@ sub create_triggers {
     my $column_list_str     = join(', ', map {        $dbh->quote_identifier($_) } @column_list );
     my $new_column_list_str = join(', ', map { "NEW.".$dbh->quote_identifier($_) } @column_list );
 
+    my $nseo = $helper->null_safe_equals_op;
+    my %trigger_dml_stmts;
+
     # Using REPLACE just in case the row already exists from the copy
-    my $replace_sql = join("\n",
+    $trigger_dml_stmts{replace} = join("\n",
         "REPLACE INTO $new_table_name_quote",
         "    ($column_list_str)",
         "VALUES",
@@ -1281,9 +1092,8 @@ sub create_triggers {
     my $update_unique_where_str = join(' AND ',
         (map {
             join(
-                # Use NULL-safe equals, since unique indexes could be nullable.  "IS" is
-                # the ANSI equivalent.
-                ($dbms_name eq 'MySQL' ? ' <=> ' : ' IS '),
+                # Use NULL-safe equals, since unique indexes could be nullable
+                " $nseo ",
                 "OLD.".$dbh->quote_identifier($_),
                 "NEW.".$dbh->quote_identifier($_),
             );
@@ -1293,9 +1103,8 @@ sub create_triggers {
     my $delete_unique_where_str = join(' AND ',
         (map {
             join(
-                # Use NULL-safe equals, since unique indexes could be nullable.  "IS" is
-                # the ANSI equivalent.
-                ($dbms_name eq 'MySQL' ? ' <=> ' : ' IS '),
+                # Use NULL-safe equals, since unique indexes could be nullable
+                " $nseo ",
                 "$new_table_name_quote.".$dbh->quote_identifier($_),
                 "OLD.".$dbh->quote_identifier($_),
             );
@@ -1305,21 +1114,18 @@ sub create_triggers {
     # For the UPDATE trigger, DELETE the row, but only if the unique IDs have been
     # changed.  The "NOT ($update_unique_where_str)" part keeps from deleting rows where
     # the unique ID is untouched.
-    my $delete_for_update_sql = join("\n",
+    $trigger_dml_stmts{delete_for_update} = join("\n",
         "DELETE FROM $new_table_name_quote WHERE",
         "    NOT ($update_unique_where_str) AND",
         "    $delete_unique_where_str"
     );
 
-    my $delete_for_delete_sql = join("\n",
+    $trigger_dml_stmts{delete_for_delete} = join("\n",
         "DELETE FROM $new_table_name_quote WHERE",
         "    $delete_unique_where_str"
     );
 
-    if ($dbms_name eq 'MySQL') {
-        $delete_for_update_sql =~ s/^DELETE/DELETE IGNORE/;
-        $delete_for_delete_sql =~ s/^DELETE/DELETE IGNORE/;
-    }
+    $helper->modify_trigger_dml_stmts( \%trigger_dml_stmts );
 
     foreach my $trigger_type (qw< INSERT UPDATE DELETE >) {
         my $trigger_header = join(' ',
@@ -1337,18 +1143,18 @@ sub create_triggers {
 
         if    ($trigger_type eq 'INSERT') {
             # INSERT trigger: Just a REPLACE command
-            $trigger_sql .= $replace_sql.';';
+            $trigger_sql .= $trigger_dml_stmts{replace}.';';
         }
         elsif ($trigger_type eq 'UPDATE') {
             # UPDATE trigger: DELETE special unique ID changes, then another REPLACE command.
             $trigger_sql .= join("\n",
-                $delete_for_update_sql.';',
-                $replace_sql.';',
+                $trigger_dml_stmts{delete_for_update}.';',
+                $trigger_dml_stmts{replace}.';',
             );
         }
         elsif ($trigger_type eq 'DELETE') {
             # DELETE trigger: Just a DELETE command
-            $trigger_sql .= $delete_for_delete_sql.';';
+            $trigger_sql .= $trigger_dml_stmts{delete_for_delete}.';';
         }
         $trigger_sql .= "\nEND";
 
@@ -1385,18 +1191,7 @@ sub copy_rows {
 
     # Analyze the table, since we have a ton of new rows now
     $progress->message("Analyzing table");
-
-    my $dbms_name = $vars->{dbms_name};
-
-    my $new_table_name       = $self->new_table_name;
-    my $new_table_name_quote = $dbh->quote_identifier($new_table_name);
-
-    if ($dbms_name eq 'SQLite') {
-        $self->dbh_runner_do("ANALYZE $new_table_name_quote");
-    }
-    else {
-        $self->dbh_runner_do("ANALYZE TABLE $new_table_name_quote");
-    }
+    $self->_helper->analyze_table( $self->new_table_name );
 
     $progress->update;
 }
@@ -1414,32 +1209,30 @@ sub swap_tables {
 
     my $progress   = $vars->{progress_bar};
     my $reversible = $self->reversible;
+    my $helper     = $self->_helper;
 
     my $catalog         = $vars->{catalog};
     my $schema          = $vars->{schema};
     my $orig_table_name = $self->table_name;
     my $new_table_name  = $self->new_table_name;
 
-    my $dbms_name = $vars->{dbms_name};
-
-    my $orig_table_name_quote = $dbh->quote_identifier($orig_table_name);
-    my $new_table_name_quote  = $dbh->quote_identifier($new_table_name);
-
     my $escape = $dbh->get_info( $GetInfoType{SQL_SEARCH_PATTERN_ESCAPE} ) // '\\';
 
     # Fire the before_swap hook
     $self->fire_hook('before_swap');
 
-    # The existing parent/child FK list needs to be captured prior to the swap.  The FKs
-    # have already been created, and possibly changed/deleted, from the new table, so we
-    # use that as reference.  They have *not* been re-created on the child tables, so
-    # the original table is used as reference.
-    my $fk_hash = $vars->{foreign_keys}{definitions} //= {};
-    $self->dbh_runner(run => set_subname '_fk_info_query', sub {
-        $dbh = $_;
-        $fk_hash->{parent} = $self->_fk_info_to_hash( $dbh->foreign_key_info(undef, undef, undef, $catalog, $schema, $new_table_name)  );
-        $fk_hash->{child}  = $self->_fk_info_to_hash( $dbh->foreign_key_info($catalog, $schema, $orig_table_name, undef, undef, undef) );
-    });
+    if ($helper->dbms_uses_global_fk_namespace || $helper->child_fks_need_adjusting) {
+        # The existing parent/child FK list needs to be captured prior to the swap.  The FKs
+        # have already been created, and possibly changed/deleted, from the new table, so we
+        # use that as reference.  They have *not* been re-created on the child tables, so
+        # the original table is used as reference.
+        my $fk_hash = $vars->{foreign_keys}{definitions} //= {};
+        $self->dbh_runner(run => set_subname '_fk_info_query', sub {
+            $dbh = $_;
+            $fk_hash->{parent} = $self->_fk_info_to_hash( $dbh->foreign_key_info(undef, undef, undef, $catalog, $schema, $new_table_name)  );
+            $fk_hash->{child}  = $self->_fk_info_to_hash( $dbh->foreign_key_info($catalog, $schema, $orig_table_name, undef, undef, undef) );
+        });
+    }
 
     # Find an "_old" table name first
     my $old_table_name = $vars->{old_table_name} = $self->_find_new_identifier(
@@ -1456,23 +1249,7 @@ sub swap_tables {
     $progress->message("Swapping tables ($new_table_name --> $orig_table_name --> $old_table_name)");
 
     # Let's swap tables!
-    if    ($dbms_name eq 'MySQL') {
-        $self->dbh_runner_do(
-            "RENAME TABLE $orig_table_name_quote TO $old_table_name_quote, $new_table_name_quote TO $orig_table_name_quote"
-        );
-    }
-    elsif ($dbms_name eq 'SQLite') {
-        # SQLite does not have a swap table as a single statement, but it does have
-        # transactional DDL.
-        $self->dbh_runner(txn => set_subname '_table_swap_sqlite', sub {
-            $dbh = $_;
-            $dbh->do("ALTER TABLE $orig_table_name_quote RENAME TO $old_table_name_quote");
-            $dbh->do("ALTER TABLE $new_table_name_quote RENAME TO $orig_table_name_quote");
-        });
-    }
-    else {
-        die "Not sure how to swap tables for $dbms_name systems!";
-    }
+    $helper->swap_tables($new_table_name, $orig_table_name, $old_table_name);
 
     # Kill the undo stack now, just in case something weird happens between now and the
     # end of the reversibly block.  We've reached a "mostly successful" state, so rolling
@@ -1497,13 +1274,10 @@ sub drop_old_table {
 
     my $progress   = $vars->{progress_bar};
     my $reversible = $self->reversible;
+    my $helper     = $self->_helper;
 
     my $old_table_name       = $vars->{old_table_name};
     my $old_table_name_quote = $dbh->quote_identifier($old_table_name);
-
-    my $dbms_name = $vars->{dbms_name};
-
-    my $fk_hash = $vars->{foreign_keys}{definitions};
 
     $reversible->failure_warning( join "\n",
         '',
@@ -1518,23 +1292,12 @@ sub drop_old_table {
     #
     # SQLite doesn't actually support DROP CONSTRAINT, but it doesn't do any messy business with
     # FK renames, either.  So, SQLite can just skip this step.
-    unless ($dbms_name eq 'SQLite') {
+    if ($helper->child_fks_need_adjusting) {
         $progress->message("Removing FKs from child tables");
 
-        # NOTE: Most of this is ANSI SQL
-
-        foreach my $tbl_fk_name (sort keys %{$fk_hash->{child}}) {
-            my $fk = $fk_hash->{child}{$tbl_fk_name};
-
-            $self->dbh_runner_do(join ' ',
-                'ALTER TABLE',
-                $dbh->quote_identifier( $fk->{fk_table_name} ),
-                'DROP',
-                # MySQL uses 'FOREIGN KEY' on DROPs, and everybody else uses 'CONSTRAINT' on both
-                ($dbms_name eq 'MySQL' ? 'FOREIGN KEY' : 'CONSTRAINT'),
-                $dbh->quote_identifier( $fk->{fk_name} ),
-            );
-        }
+        $self->dbh_runner_do(
+            $helper->remove_fks_from_child_tables_stmts
+        );
     }
 
     # Now, the actual DROP
@@ -1556,24 +1319,9 @@ sub cleanup_foreign_keys {
     my $dbh  = $self->dbh;
     my $vars = $self->_vars;
 
-    my $dbms_name = $vars->{dbms_name};
-
     my $progress   = $vars->{progress_bar};
     my $reversible = $self->reversible;
-
-    # SQLite doesn't need this step
-    if ($dbms_name eq 'SQLite') {
-        $progress->update;
-        return;
-    }
-
-    my $catalog    = $vars->{catalog};
-    my $schema     = $vars->{schema};
-    my $table_name = $self->table_name;
-
-    my $table_name_quote = $dbh->quote_identifier($table_name);
-
-    my $fk_hash = $vars->{foreign_keys}{definitions};
+    my $helper     = $self->_helper;
 
     $reversible->failure_warning( join "\n",
         '',
@@ -1582,48 +1330,25 @@ sub cleanup_foreign_keys {
         '',
     );
 
-    if ($dbms_name eq 'MySQL') {
-        # MySQL has global namespaces for foreign keys, so we are renaming them back to
+    if ($helper->dbms_uses_global_fk_namespace) {
+        # The DB has global namespaces for foreign keys, so we are renaming them back to
         # their original names.  The original table has already been dropped, so there's
         # no more risk of bumping into that namespace.
-
         $progress->message("Renaming parent FKs back to the original constraint names");
 
-        foreach my $tbl_fk_name (sort keys %{$fk_hash->{parent}}) {
-            my $fk = $fk_hash->{parent}{$tbl_fk_name};
-
-            my $changed_fk_name = $fk->{fk_name};
-            my $orig_fk_name    = $vars->{foreign_keys}{orig_names}{"$table_name.$changed_fk_name"};
-
-            unless ($orig_fk_name) {
-                $progress->message("WARNING: Did not find original FK name for $table_name.$changed_fk_name!");
-                next;
-            }
-
-            # _fk_to_sql uses this directly, so just change it at the $fk hashref
-            $fk->{fk_name} = $orig_fk_name;
-
-            $self->dbh_runner_do(join "\n",
-                "ALTER TABLE $table_name_quote",
-                "    DROP FOREIGN KEY ".$dbh->quote_identifier( $changed_fk_name ).',',
-                "    ADD CONSTRAINT ".$self->_fk_to_sql($fk)
-            );
-        }
+        $self->dbh_runner_do(
+            $helper->rename_fks_back_to_original_stmts
+        );
     }
 
-    $progress->message("Adding FKs back on child tables");
+    if ($helper->child_fks_need_adjusting) {
+        # Since we captured the child FK names prior to the swap, they should have the
+        # original FK names, even before MySQL's "helpful" changes on "${tbl_name}_ibfk_" FK
+        # names.
+        $progress->message("Adding FKs back on child tables");
 
-    # Since we captured the child FK names prior to the swap, they should have the
-    # original FK names, even before MySQL's "helpful" changes on "${tbl_name}_ibfk_" FK
-    # names.
-    foreach my $tbl_fk_name (sort keys %{$fk_hash->{child}}) {
-        my $fk = $fk_hash->{child}{$tbl_fk_name};
-
-        $self->dbh_runner_do(join ' ',
-            "ALTER TABLE",
-            $dbh->quote_identifier( $fk->{fk_table_name} ),
-            "ADD CONSTRAINT",
-            $self->_fk_to_sql($fk),
+        $self->dbh_runner_do(
+            $helper->add_fks_back_to_child_tables_stmts
         );
     }
 
@@ -1746,7 +1471,7 @@ sub _fk_info_to_hash {
 
             # Sadly, foreign_key_info doesn't always fill in all of the details for the FK, so the
             # CREATE TABLE SQL is actually the better record.  Fortunately, this is all ANSI SQL.
-            my $create_table_sql = $create_table_sql{$fk_table_name} //= $self->_create_table_sql($fk_table_name);
+            my $create_table_sql = $create_table_sql{$fk_table_name} //= $self->_helper->create_table_sql($fk_table_name);
             my $fk_name_quote_re = '(?:'.quotemeta( $dbh->quote_identifier($fk_name) ).'|'.quotemeta($fk_name).')';
 
             if ($create_table_sql =~ m<
