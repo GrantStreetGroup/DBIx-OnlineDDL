@@ -6,7 +6,12 @@ use warnings;
 
 use Test2::Bundle::More;
 use Test2::Require::AuthorTesting;
-plan tests => 3;
+use File::Find;
+
+my @pm_files;
+find(sub { push @pm_files, $File::Find::name if /\.pm$/}, 'lib');
+
+plan tests => 2 + @pm_files;
 
 sub not_in_file_ok {
     my ($filename, %regex) = @_;
@@ -50,6 +55,6 @@ sub module_boilerplate_ok {
 
 not_in_file_ok('Makefile.PL');
 not_in_file_ok('CHANGES');
-module_boilerplate_ok('lib/DBIx/OnlineDDL.pm');
+module_boilerplate_ok($_) for @pm_files;
 
-
+done_testing;

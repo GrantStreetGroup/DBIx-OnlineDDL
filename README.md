@@ -91,7 +91,7 @@ If any step in the process fails, the undo stack is run to return the DB back to
 This module uses as many of the DBI info methods as possible, along with ANSI SQL in most
 places, to be compatible with multiple RDBMS.  So far, it will work with MySQL or SQLite,
 but can be expanded to include more systems with a relatively small amount of code
-changes.
+changes.  (See [DBIx::OnlineDDL::Helper::Base](https://metacpan.org/pod/DBIx::OnlineDDL::Helper::Base) for details.)
 
 **DISCLAIMER:** You should not rely on this class to magically fix any and all locking
 problems the DB might experience just because it's being used.  Thorough testing and
@@ -131,79 +131,6 @@ OnlineDDL process is complete.
 Don't have foreign key constraints and `gh-ost` is already working for you?  Great!
 Keep using it.
 
-# PACKAGE GLOBALS
-
-Package globals are another way to introspect or control elements of the ODDL
-configuration, specifically with regard to default values or settings.  We like to keep
-our magic numbers where we can see them.
-
-Some of these values are not referenced until it comes time to make use of them, meaning
-any mid-execution alterations may have unpredictable results for running processes.
-Best practices include using `local` to automatically scope protect changes, and making
-all changes prior to instantiating/executing a `DBIx::OnlineDDL` object.
-
-### DEFAULT\_TIMEOUT\_LOCK\_FILE
-
-```perl
-# Example: Turn off file locking on NFS, which doesn's support it.  But also maybe
-# don't use on NFS if you can help it, mkay?
-local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_FILE = 0;
-```
-
-Amount of time (in seconds) to wait when attempting to acquire filesystem locks (on
-filesystems which support locking).  Float or fractional values are allowed.
-
-Default value is 1 second.
-
-### DEFAULT\_TIMEOUT\_LOCK\_DB
-
-```perl
-# Example: Maybe wait a little longer to acquire DB locks
-local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_DB = 120;
-```
-
-Amount of time (in whole seconds) to wait when attempting to acquire table and/or database
-level locks before falling back to retry (see also ["DEFAULT\_MAX\_ATTEMPTS"](#DEFAULT_MAX_ATTEMPTS).
-
-Default value is 60 seconds.
-
-### DEFAULT\_TIMEOUT\_LOCK\_ROW
-
-```perl
-# Example: Be super-aggressive about row-level DB locks:
-local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_LOCK_ROW = 1;
-```
-
-Amount of time (in whole seconds) to wait when attempting to acquire row-level locks,
-which apply to much lower-level operations than ["DEFAULT\_TIMEOUT\_LOCK\_DB"](#DEFAULT_TIMEOUT_LOCK_DB).  At this
-scope the lesser of either of these settings will take precedence.
-
-Default value is 2 seconds.
-
-### DEFAULT\_TIMEOUT\_SESSION
-
-```perl
-# Example: Reduce session inactivity timeout (fail fast)
-local $DBIx::OnlineDDL::DEFAULT_TIMEOUT_SESSION = 60;
-```
-
-Value (in whole seconds) for inactive session timeouts on the database side (definitely
-applies to MySQL, may apply to others).
-
-Default value is 28,800 seconds (8 hours).
-
-### DEFAULT\_MAX\_ATTEMPTS
-
-```perl
-# Example: Try really REALLLY hard.
-local $DBIx::OnlineDDL::DEFAULT_MAX_ATTEMPTS = 50;
-```
-
-Value for the ["dbic\_retry\_opts"](#dbic_retry_opts)'s `max_attempts` hash value, unless otherwise
-specified.
-
-Default value is 20.
-
 # ATTRIBUTES
 
 ## DBIC Attributes
@@ -220,7 +147,7 @@ proper post-connection details.
 
 A hashref of DBIC retry options.  These options control how retry protection works within
 DBIC.  Right now, this is just limited to `max_attempts`, which controls the number of
-times to retry.  The default is 20.
+times to retry.  The default `max_attempts` is 20.
 
 ## DBI Attributes
 
@@ -234,8 +161,8 @@ within the object.
 Required, except for DBIC users, who should be setting ["rsrc"](#rsrc) above.  It is also
 assumed that the correct database is already active.
 
-The object will be tweaked to ensure sane defaults, proper post-connection details, and
-a custom `retry_handler`.
+The object will be tweaked to ensure sane defaults, proper post-connection details, a
+custom `retry_handler`, and set a default `max_attempts` of 20, if not already set.
 
 ### table\_name
 
@@ -320,6 +247,44 @@ id_name     => 'pk_id',  # especially if there isn't an obvious integer PK
 Specifying ["coderef" in DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker#coderef) is not recommended, since Active DBI Processing
 mode will be used.
 
+### db\_timeouts
+
+A hashref of timeouts used for various DB operations, and usually set at the beginning of
+each connection.  Some of these settings may be RDBMS-specific.
+
+#### lock\_file
+
+Amount of time (in seconds) to wait when attempting to acquire filesystem locks (on
+filesystems which support locking).  Float or fractional values are allowed.  This
+currently only applies to SQLite.
+
+Default value is 1 second.  The downside is that the SQLite default is actually 0, so
+other (non-OnlineDDL) connections should have a setting that is more than that to prevent
+lock contention.
+
+#### lock\_db
+
+Amount of time (in whole seconds) to wait when attempting to acquire table and/or database
+level locks before falling back to retry.
+
+Default value is 60 seconds.
+
+#### lock\_row
+
+Amount of time (in whole seconds) to wait when attempting to acquire row-level locks,
+which apply to much lower-level operations than ["lock\_db"](#lock_db).  At this scope, the lesser
+of either of these two settings will take precedence.
+
+Default value is 2 seconds.  Lower values are preferred for row lock wait timeouts, so
+that OnlineDDL is more likely to be the victim of lock contention.  OnlineDDL can simply
+retry the connection at that point.
+
+#### session
+
+Amount of time (in whole seconds) for inactive session timeouts on the database side.
+
+Default value is 28,800 seconds (8 hours), which is MySQL's default.
+
 ### reversible
 
 A [Eval::Reversible](https://metacpan.org/pod/Eval::Reversible) object, used for rollbacks.  A default will be created, if not
@@ -364,7 +329,7 @@ protection, in case of exceptions.
 
 ### fire\_hook
 
-```perl
+```
 $online_ddl->fire_hook('before_triggers');
 ```
 
@@ -376,7 +341,7 @@ See ["coderef\_hooks"](#coderef_hooks) for more details.
 
 ### dbh
 
-```perl
+```
 $online_ddl->dbh;
 ```
 
@@ -402,7 +367,7 @@ is honored.
 
 ### dbh\_runner\_do
 
-```perl
+```
 $online_ddl->dbh_runner_do(
     "ALTER TABLE $table_name ADD COLUMN foobar",
     ["ALTER TABLE ? DROP COLUMN ?", undef, $table_name, 'baz'],
@@ -476,7 +441,7 @@ So, tables swapped with `pt-osc` are not exactly what they used to be before the
 It also had a number of other quirks that just didn't work out for us, related to FKs and
 the amount of switches required to make it (semi-)work.
 
-Additionally, by making `DBIx::OnlineDDL` its own Perl module, it's a lot easier to run
+Additionally, by making DBIx::OnlineDDL its own Perl module, it's a lot easier to run
 Perl-based schema changes along side [DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker) without having to switch
 between Perl and CLI.  If other people want to subclass this module for their own
 environment-specific quirks, they have the power to do so, too.
