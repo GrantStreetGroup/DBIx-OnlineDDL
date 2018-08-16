@@ -54,7 +54,7 @@ __PACKAGE__->table("cd");
   is_foreign_key: 1
   is_nullable: 1
 
-=head2 single_track
+=head2 prev_cdid
 
   data_type: 'integer'
   is_foreign_key: 1
@@ -72,6 +72,8 @@ __PACKAGE__->add_columns(
   "year",
   { data_type => "varchar", is_nullable => 0, size => 100 },
   "genreid",
+  { data_type => "integer", is_foreign_key => 1, is_nullable => 1 },
+  "prev_cdid",
   { data_type => "integer", is_foreign_key => 1, is_nullable => 1 },
 );
 
@@ -162,6 +164,26 @@ __PACKAGE__->belongs_to(
   "genreid",
   "CDTest::Schema::Result::Genre",
   { genreid => "genreid" },
+  {
+    is_deferrable => 0,
+    join_type     => "LEFT",
+    on_delete     => "SET NULL",
+    on_update     => "CASCADE",
+  },
+);
+
+=head2 prev_cd
+
+Type: belongs_to
+
+Related object: L<CDTest::Schema::Result::CD>
+
+=cut
+
+__PACKAGE__->belongs_to(
+  "prev_cd",
+  "CDTest::Schema::Result::CD",
+  { prev_cdid => "cd" },
   {
     is_deferrable => 0,
     join_type     => "LEFT",

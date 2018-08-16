@@ -237,25 +237,25 @@ sub populate_schema {
     ]);
 
     $schema->populate('CD', [
-        [ qw/cdid artist title year genreid/ ],
-        [ 1, 1, "Spoonful of bees", 1999, 1 ],
-        [ 2, 1, "Forkful of bees", 2001 ],
-        [ 3, 1, "Caterwaulin' Blues", 1997 ],
+        [ qw/cdid artist title year prev_cdid genreid/ ],
+        [ 1, 1, "Spoonful of bees", 1999, undef, 1 ],
+        [ 2, 1, "Forkful of bees", 2001, 1 ],
+        [ 3, 1, "Caterwaulin' Blues", 1997, 2 ],
         [ 4, 2, "Generic Manufactured Singles", 2001 ],
         [ 5, 3, "Come Be Depressed With Us", 1998 ],
 
-        [ 9,  10, "Me and You", 2007, 2 ],
-        [ 10, 11, "Co-Founder", 2011, 2 ],
+        [ 9,  10, "Me and You", 2007, undef, 2 ],
+        [ 10, 11, "Co-Founder", 2011, undef, 2 ],
         [ 11, 12, "Independence Park", 2001 ],
-        [ 15, 12, "Flaming Dragon", 2007 ],
-        [ 16, 12, "Kent", 2014 ],
+        [ 15, 12, "Flaming Dragon", 2007, 11 ],
+        [ 16, 12, "Kent", 2014, 15 ],
         [ 17, 15, "42 Minutes of Silence", 2011 ],
-        [ 19, 15, "Two", 2012 ],
-        [ 21, 15, "852", 2015 ],
+        [ 19, 15, "Two", 2012, 17 ],
+        [ 21, 15, "852", 2015, 19 ],
         [ 22, 17, "Glass Window Soundtrack", 2009 ],
-        [ 24, 17, "Magenta", 2014 ],
-        [ 25, 17, "Yellow", 2014 ],
-        [ 30, 17, "Cyan", 2014 ],
+        [ 24, 17, "Magenta", 2014, 22 ],
+        [ 25, 17, "Yellow", 2014, 24 ],
+        [ 30, 17, "Cyan", 2014, 25 ],
     ]);
 
     $schema->populate('Tag', [

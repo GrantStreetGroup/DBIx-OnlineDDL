@@ -31,8 +31,10 @@ CREATE TABLE "cd" (
   "title" varchar(100) NOT NULL,
   "year" varchar(100) NOT NULL,
   "genreid" integer,
+  "prev_cdid" integer,
   FOREIGN KEY ("artist") REFERENCES "artist"("artistid") ON DELETE CASCADE ON UPDATE CASCADE,
-  FOREIGN KEY ("genreid") REFERENCES "genre"("genreid") ON DELETE SET NULL ON UPDATE CASCADE
+  FOREIGN KEY ("genreid") REFERENCES "genre"("genreid") ON DELETE SET NULL ON UPDATE CASCADE,
+  FOREIGN KEY ("prev_cdid") REFERENCES "cd"("cdid") ON DELETE SET NULL ON UPDATE CASCADE
 );
 
 CREATE INDEX "cd_idx_artist" ON "cd" ("artist");
