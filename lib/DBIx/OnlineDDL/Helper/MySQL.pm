@@ -133,8 +133,7 @@ sub rename_fks_in_table_sql {
     my $iqre = $dbh->get_info( $GetInfoType{SQL_IDENTIFIER_QUOTE_CHAR} ) || '`';
     $iqre = quotemeta $iqre;
 
-    my @fk_names;
-    push @fk_names, $1 for ($table_sql =~ /CONSTRAINT ${iqre}([^$iqre\s]+)${iqre} FOREIGN KEY/i);
+    my @fk_names = ($table_sql =~ /CONSTRAINT ${iqre}([^$iqre\s]+)${iqre} FOREIGN KEY/ig);
 
     foreach my $fk_name (@fk_names) {
         my $new_fk_name = $self->find_new_identifier(
