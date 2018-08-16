@@ -345,6 +345,9 @@ sub remove_fks_from_child_tables_stmts {
     foreach my $tbl_fk_name (sort keys %{$fk_hash->{child}}) {
         my $fk = $fk_hash->{child}{$tbl_fk_name};
 
+        # Ignore self-joined FKs
+        next if $fk->{fk_table_name} eq $self->table_name || $fk->{fk_table_name} eq $self->new_table_name;
+
         # ANSI SQL, of course
         push @stmts, join(' ',
             'ALTER TABLE',
@@ -420,6 +423,9 @@ sub add_fks_back_to_child_tables_stmts {
     my @stmts;
     foreach my $tbl_fk_name (sort keys %{$fk_hash->{child}}) {
         my $fk = $fk_hash->{child}{$tbl_fk_name};
+
+        # Ignore self-joined FKs
+        next if $fk->{fk_table_name} eq $self->table_name || $fk->{fk_table_name} eq $self->new_table_name;
 
         $self->dbh_runner_do(join ' ',
             "ALTER TABLE",

@@ -970,6 +970,18 @@ sub create_new_table {
     my $orig_table_name_quote_re = '('.quotemeta($orig_table_name_quote).'|'.quotemeta($orig_table_name).')';
     $table_sql =~ s/(?<=^CREATE TABLE )$orig_table_name_quote_re/$new_table_name_quote/;
 
+    # NOTE: This SQL will still have the old table name in self-referenced FKs.  This is
+    # okay, since no supported RDBMS currently auto-renames the referenced table name
+    # during table moves, and the old table is still the definitive point-of-record until
+    # the table swap.  Furthermore, pointing the FK to the new table may cause bad FK
+    # constraint failures within the triggers, if the referenced ID hasn't been copied to
+    # the new table yet.
+    #
+    # If we ever have a RDBMS that does some sort of auto-renaming of FKs, we'll need to
+    # accommodate it.  It's also worth noting that turning FKs on during the session can
+    # actually affect this kind of behavior.  For example, both MySQL & SQLite will rename
+    # them during table swaps, but only if the FK checks are on.
+
     # Actually create the table
     $self->dbh_runner_do($table_sql);
 
