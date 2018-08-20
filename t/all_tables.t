@@ -4,69 +4,12 @@ use lib qw(t/lib);
 use strict;
 use warnings;
 
-use Test2::Bundle::More;
-use Test2::Tools::Compare;
-use Test2::Tools::Exception;
-use Test2::Tools::Explain;
-
-use DBI;
-use DBIx::BatchChunker;
-use DBIx::OnlineDDL;
-use CDTest;
-
-use Path::Class 'file';
-
-use Env qw< ONLINEDDL_TEST_DEBUG CDTEST_MASS_POPULATE CDTEST_DSN CDTEST_DBUSER CDTEST_DBPASS >;
+use Test::OnlineDDL;
 
 ############################################################
 
-my $FILE = file(__FILE__);
-my $root = $FILE->dir->parent;
-my $db_file = $root->file('t', $FILE->basename.'.db');
-
-my $CHUNK_SIZE = 3;
-
-# Enforce a real file SQLite DB if default
-unless ($CDTEST_DSN) {
-    $CDTEST_DSN    = "dbi:SQLite:dbname=$db_file";
-    $CDTEST_DBUSER = '';
-    $CDTEST_DBPASS = '';
-    unlink $db_file if -e $db_file;
-}
-
-my $dbms_name = CDTest->dbms_name;
-
-############################################################
-
-sub table_based_onlineddl_test ($$&) {
-    my ($test_name, $source_name, $test_code) = @_;
-    subtest("$source_name: $test_name", sub {
-        # Initialize the schema
-        my $cd_schema;
-        try_ok { $cd_schema = CDTest->init_schema } 'Tables created';
-        die 'Schema initialization failed!' if $@;
-
-        my $rsrc = $cd_schema->source($source_name);
-        my $rs   = $cd_schema->resultset($source_name);
-        my $table_name = $rsrc->name;
-
-        # Acquire the total number of track rows
-        my $row_count = $rs->count;
-
-        # Run the tests
-        eval { $test_code->($cd_schema) };
-        fail 'Test died', $@ if $@;
-
-        # Verify the row counts
-        unless ($@) {
-            my $new_row_count = $rs->count;
-            cmp_ok($new_row_count, '==', $row_count, 'Final row counts are as expected');
-        }
-
-        # Clean the schema
-        try_ok { CDTest->clean_schema( $cd_schema ) } 'Tables dropped';
-    });
-}
+my $CHUNK_SIZE = $CDTEST_MASS_POPULATE ? 5000 : 3;
+my $dbms_name  = CDTest->dbms_name;
 
 ############################################################
 
@@ -77,7 +20,7 @@ my @source_names =
 ;
 
 foreach my $source_name (sort @source_names) {
-    table_based_onlineddl_test 'No-op', $source_name, sub {
+    onlineddl_test 'No-op', $source_name, sub {
         my $cd_schema  = shift;
         my $rsrc       = $cd_schema->source($source_name);
         my $table_name = $rsrc->name;
@@ -107,10 +50,29 @@ foreach my $source_name (sort @source_names) {
         $orig_table_sql =~ s/ AUTO_INCREMENT=\K\d+/###/;
         $new_table_sql  =~ s/ AUTO_INCREMENT=\K\d+/###/;
 
-        is $new_table_sql, $orig_table_sql,  "New table SQL for `$table_name` matches the old one";
+        is $new_table_sql, $orig_table_sql,  "New table SQL for `$table_name` matches the old one" or do {
+            diag "NEW: $new_table_sql";
+            diag "OLD: $orig_table_sql";
+        };
+
+        # Verify post-connection variables are still active even after some disconnections.  It
+        # seems to be rather hard to query certain SQLite PRAGMA settings, however, so we'll skip
+        # the checks for SQLite.
+        my $dbh = $cd_schema->storage->dbh;
+        if ($dbms_name eq 'MySQL') {
+            my $db_timeouts  = $online_ddl->db_timeouts;
+            my $session_vals = $dbh->selectrow_hashref(
+                'SELECT @@foreign_key_checks AS fk_checks, @@wait_timeout AS timeout_session, '.
+                '@@lock_wait_timeout AS timeout_lock_db, @@innodb_lock_wait_timeout AS timeout_lock_row'
+            );
+            is $session_vals, {
+                fk_checks => 0,
+                map {; "timeout_$_" => $db_timeouts->{$_} } qw< session lock_db lock_row >
+            }, "Session values looks right";
+        }
     };
 
-    table_based_onlineddl_test 'Add column', $source_name, sub {
+    onlineddl_test 'Add column', $source_name, sub {
         my $cd_schema  = shift;
         my $rsrc       = $cd_schema->source($source_name);
         my $table_name = $rsrc->name;
@@ -164,7 +126,5 @@ foreach my $source_name (sort @source_names) {
 }
 
 ############################################################
-
-unlink $db_file if -e $db_file;
 
 done_testing;

@@ -69,9 +69,10 @@ my %WriteMakefileArgs = (
         'Test2::Tools::Explain'   => 0,
         'Scalar::Util'            => 0,
 
-        'Class::Load' => 0,
-        'DBIx::Class' => 0,
-        'Path::Class' => 0,
+        'Class::Load'  => 0,
+        'DBIx::Class'  => 0,
+        'Import::Into' => '1.00',  # sane minimum baseline
+        'Path::Class'  => 0,
     },
 );
 
