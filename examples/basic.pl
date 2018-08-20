@@ -48,7 +48,7 @@ DBIx::OnlineDDL->construct_and_execute(
             my $qname = $dbh->quote_identifier($name);
             my $qcol  = $dbh->quote_identifier('test_column');
 
-            $dbh->do("ALTER TABLE $qname ADD COLUMN $qcol VARCHAR(100) NULL");
+            $oddl->dbh_runner_do("ALTER TABLE $qname ADD COLUMN $qcol VARCHAR(100) NULL");
         },
     },
 
