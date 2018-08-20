@@ -605,8 +605,12 @@ sub BUILD {
         my @post_connection_details = map { [ do_sql => $_ ] } @stmts;
 
         # XXX: Tapping into a private attribute here, but it's a lot better than parsing
-        # $storage->connect_info.
-        my $on_connect_call = $rsrc->storage->_dbic_connect_attributes->{on_connect_call};
+        # $storage->connect_info.  We are also not attaching these details to
+        # connect_info, so public introspection won't pick up our changes.  Undecided
+        # whether this is good or bad...
+
+        my $storage         = $rsrc->storage;
+        my $on_connect_call = $storage->_dbic_connect_attributes->{on_connect_call};
 
         # Parse on_connect_call to make sure we can add to it
         my $ref = defined $on_connect_call && ref $on_connect_call;
@@ -643,7 +647,9 @@ sub BUILD {
             die "Illegal reftype $ref for on_connect_call connection attribute!";
         }
 
-        $rsrc->storage->_dbic_connect_attributes->{on_connect_call} = $on_connect_call;
+        # Set the new options on the relevant attributes that Storage::DBI->connect_info touches.
+        $storage->_dbic_connect_attributes->{on_connect_call} = $on_connect_call;
+        $storage->on_connect_call($on_connect_call);
     }
     else {
         ### DBIx::Connector::Retry (via DBI Callbacks)
