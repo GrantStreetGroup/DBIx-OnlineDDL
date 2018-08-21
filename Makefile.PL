@@ -51,6 +51,7 @@ my %WriteMakefileArgs = (
     PREREQ_PM     => {
         # Start from "scan-perl-prereqs --pretty lib"
 
+        'Class::Load'          => 0,
         DBI                    => '1.630',  # sane minimum baseline
         'DBIx::BatchChunker'   => '0.92',   # stmt changes + dbi_connector
         'Eval::Reversible'     => 0,
@@ -63,16 +64,17 @@ my %WriteMakefileArgs = (
     TEST_REQUIRES => {
         # Start from "scan-perl-prereqs --pretty t"
 
-        'Test2::Bundle::More'     => 0,
+        'Test2::Bundle::More'     => '0.000060',  # has try_ok
         'Test2::Tools::Compare'   => 0,
         'Test2::Tools::Exception' => 0,
         'Test2::Tools::Explain'   => 0,
-        'Scalar::Util'            => 0,
 
-        'Class::Load'  => 0,
-        'DBIx::Class'  => 0,
-        'Import::Into' => '1.00',  # sane minimum baseline
-        'Path::Class'  => 0,
+        'Class::Load'        => 0,
+        'DBIx::BatchChunker' => '0.92',  # stmt changes + dbi_connector
+        'DBIx::Class'        => 0,
+        'Import::Into'       => '1.00',  # sane minimum baseline
+        'Path::Class'        => 0,
+        'Scalar::Util'       => 0,
     },
 );
 
@@ -93,16 +95,16 @@ $WriteMakefileArgs{META_MERGE}{prereqs} = {
     develop => {
         requires => {
             'perl'                          => '5.10.1',
-            'Module::Metadata'              => '1.00',    # sane minimum baseline
-            'Perl::PrereqScanner'           => '1.023',   # sane minimum baseline
+            'Module::Metadata'              => '1.00',      # sane minimum baseline
+            'Perl::PrereqScanner'           => '1.023',     # sane minimum baseline
             'Pod::Markdown::Github'         => 0,
-            'Pod::Readme'                   => 'v1.1.2',  # sane minimum baseline
-            'Test2::Suite'                  => 0,
+            'Pod::Readme'                   => 'v1.1.2',    # sane minimum baseline
+            'Test2::Suite'                  => '0.000060',  # has try_ok
             'Test::CPAN::Changes'           => 0,
-            'Test::Pod'                     => '1.51',    # sane minimum baseline
-            'Test::Pod::Coverage'           => '1.10',    # sane minimum baseline
+            'Test::Pod'                     => '1.51',      # sane minimum baseline
+            'Test::Pod::Coverage'           => '1.10',      # sane minimum baseline
             'Test::Strict'                  => 0,
-            'Test::Version'                 => '2.00',    # sane minimum baseline
+            'Test::Version'                 => '2.00',      # sane minimum baseline
         },
     },
 };
