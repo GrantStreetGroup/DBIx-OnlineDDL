@@ -1,11 +1,11 @@
 DBIx-OnlineDDL
 ==============
 
-Created:         2018-06-11
+Created:         2018-08-21
 Home page:       <https://metacpan.org/release/DBIx-OnlineDDL>
 Bug tracker:     <https://github.com/GrantStreetGroup/DBIx-OnlineDDL/issues>
 Maintainer:      Grant Street Group <developers@grantstreet.com>
 
-0.90        2018-06-11  # FIXME: Change the date before the release
+0.90        2018-08-21
 
     - Initial release

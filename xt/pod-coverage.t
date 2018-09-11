@@ -11,6 +11,9 @@ use Test::Pod::Coverage 0.08;
 my %global_exceptions = ( also_private => [qw< BUILDARGS FOREIGNBUILDARGS BUILD DEMOLISH >] );
 
 my %exceptions = (
+    'DBIx::OnlineDDL::Helper::Base'   => { trustme => [qw< child_fks_need_adjusting dbms_name progress >] },
+    'DBIx::OnlineDDL::Helper::MySQL'  => { also_private => [ qr/.+/ ] },
+    'DBIx::OnlineDDL::Helper::SQLite' => { also_private => [ qr/.+/ ] },
 );
 
 my @modules = all_modules();
