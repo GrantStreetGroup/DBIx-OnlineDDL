@@ -247,6 +247,34 @@ id_name     => 'pk_id',  # especially if there isn't an obvious integer PK
 Specifying ["coderef" in DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker#coderef) is not recommended, since Active DBI Processing
 mode will be used.
 
+These options will be included into the hashref, unless specifically overridden by key
+name:
+
+```perl
+id_name      => $first_pk_column,  # will warn if the PK is multi-column
+target_time  => 1,
+sleep        => 0.5,
+
+# If using DBIC
+dbic_storage => $rsrc->storage,
+rsc          => $id_rsc,
+dbic_retry_opts => {
+    max_attempts  => 20,
+    # best not to change this, unless you know what you're doing
+    retry_handler => $onlineddl_retry_handler,
+},
+
+# If using DBI
+dbi_connector => $oddl->dbi_connector,
+min_stmt      => $min_sql,
+max_stmt      => $max_sql,
+
+# For both
+count_stmt    => $count_sql,
+stmt          => $insert_select_sql,
+progress_name => $copying_msg,
+```
+
 ### db\_timeouts
 
 A hashref of timeouts used for various DB operations, and usually set at the beginning of
@@ -448,7 +476,7 @@ environment-specific quirks, they have the power to do so, too.
 
 # AUTHOR
 
-Grant Street Group <developers@grantstreet.com>
+Grant Street Group &lt;developers@grantstreet.com>
 
 # LICENSE AND COPYRIGHT
 
