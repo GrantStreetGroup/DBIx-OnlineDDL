@@ -1105,10 +1105,13 @@ sub create_triggers {
         my %potential_unique_ids = (
             PRIMARY => [ $dbh->primary_key($catalog, $schema, $orig_table_name) ],
         );
-        my $unique_stats = $dbh->can('statistics_info') ?
-            $dbh->statistics_info( $catalog, $schema, $orig_table_name, 1, 1 )->fetchall_arrayref({}) :
-            []
-        ;
+
+        my $unique_stats = [];
+        if ($dbh->can('statistics_info')) {
+            # Sometimes, this still dies, even with the 'can' check (eg: older DBD::mysql drivers)
+            $unique_stats = eval { $dbh->statistics_info( $catalog, $schema, $orig_table_name, 1, 1 )->fetchall_arrayref({}) };
+            $unique_stats = [] if $@;
+        }
 
         foreach my $index_name (uniq map { $_->{INDEX_NAME} } @$unique_stats) {
             my @unique_cols =
