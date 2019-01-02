@@ -841,7 +841,11 @@ L</dbh_runner_do>.
 
 sub dbh {
     my $self = shift;
-    return $self->rsrc ? $self->rsrc->storage->dbh : $self->dbi_connector->dbh;
+
+    # Even acquiring a $dbh could die (eg: 'USE $db' or other pre-connect commands), so
+    # also try to wrap this in our retry handler.
+    my $dbh = $self->dbh_runner( run => sub { $_[0] } );
+    return $dbh;
 }
 
 =head3 dbh_runner
@@ -879,6 +883,17 @@ sub _retry_handler {
 
         # Pause for an incremental amount of seconds first, to discourage any future locks
         sleep $failed;
+
+        # If retries are escalating, try forcing a disconnect
+        if ($failed >= $max / 2) {
+            # Finally have some differences between the two classes...
+            if ($runner->isa('DBIx::Class::Storage::BlockRunner')) {
+                eval { $runner->storage->disconnect };
+            }
+            else {
+                eval { $runner->disconnect };
+            }
+        }
 
         $progress->message( sprintf(
             "Attempt %u of %u", $failed, $max
@@ -920,9 +935,31 @@ sub dbh_runner {
             $c->($dbh);  # also pass it in, because that's what DBIx::Connector does
         };
 
-        unless (defined $wantarray) {           $block_runner->run($wrapper, $self, $coderef) }
-        elsif          ($wantarray) { @res    = $block_runner->run($wrapper, $self, $coderef) }
-        else                        { $res[0] = $block_runner->run($wrapper, $self, $coderef) }
+        # BlockRunner can still die post-failure, if $storage->ensure_connected (which calls ping
+        # and tries to reconnect) dies.  If that's the case, use our retry handler to check the new
+        # error message, and throw it back into BlockRunner.
+        my $br_method = 'run';
+        while ($block_runner->failed_attempt_count < $block_runner->max_attempts) {
+            eval {
+                unless (defined $wantarray) {           $block_runner->$br_method($wrapper, $self, $coderef) }
+                elsif          ($wantarray) { @res    = $block_runner->$br_method($wrapper, $self, $coderef) }
+                else                        { $res[0] = $block_runner->$br_method($wrapper, $self, $coderef) }
+            };
+            $br_method = '_run';
+
+            if (my $err = $@) {
+                # Time to really die
+                die $err if $err =~ /Reached max_attempts amount of / || $block_runner->failed_attempt_count >= $block_runner->max_attempts;
+
+                # See if the retry handler likes it
+                push @{ $block_runner->exception_stack }, $err;
+                $block_runner->_set_failed_attempt_count( $block_runner->failed_attempt_count + 1 );
+                die $err unless $self->_retry_handler($block_runner);
+            }
+            else {
+                last;
+            }
+        }
     }
     else {
         my $conn = $self->dbi_connector;
