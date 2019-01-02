@@ -871,18 +871,17 @@ sub _retry_handler {
     my $is_retryable = $self->_helper->is_error_retryable($error);
 
     if ($is_retryable) {
+        my ($failed, $max) = ($runner->failed_attempt_count, $runner->max_attempts);
         my $progress = $vars->{progress_bar};
 
         # Warn about the last error
         $progress->message("Encountered a recoverable error: $error") if $progress;
 
-        # Pause for a second first, to discourage any future locks
-        sleep 1;
+        # Pause for an incremental amount of seconds first, to discourage any future locks
+        sleep $failed;
 
         $progress->message( sprintf(
-            "Attempt %u of %u",
-            $runner->failed_attempt_count,
-            $runner->max_attempts,
+            "Attempt %u of %u", $failed, $max
         ) ) if $progress;
     }
 
