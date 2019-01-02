@@ -104,10 +104,13 @@ sub is_error_retryable {
 
         # Connections
         (?-x:mysql server has gone away)|
-        (?-x:Lost connection to mysql server)|
+        (?-x:lost connection to mysql server)|
 
         # Queries
-        (?-x:query execution was interrupted)
+        (?-x:query execution was interrupted)|
+
+        # Failovers
+        (?-x:wsrep has not yet prepared node for application use)
     >xi;
 }
 
