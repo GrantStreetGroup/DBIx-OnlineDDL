@@ -442,6 +442,8 @@ sub _fill_copy_opts {
 
     # Sane defaults for timing
     $copy_opts->{target_time} //= 1;
+    # Copies create lots of rapid I/O, binlog generation, etc. on the primary.
+    # Some sleep time gives other servers a chance to catch up:
     $copy_opts->{sleep}       //= 0.5;
 
     # Figure out what the id_name is going to be
@@ -945,6 +947,9 @@ sub dbh_runner {
                 elsif          ($wantarray) { @res    = $block_runner->$br_method($wrapper, $self, $coderef) }
                 else                        { $res[0] = $block_runner->$br_method($wrapper, $self, $coderef) }
             };
+
+            # 'run' resets failed_attempt_count, so subsequent attempts must use
+            # '_run', which does not
             $br_method = '_run';
 
             if (my $err = $@) {
