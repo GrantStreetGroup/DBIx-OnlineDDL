@@ -13,7 +13,7 @@ use Class::Load;
 use DBI::Const::GetInfoType;
 use DBIx::BatchChunker 0.92;  # with stmt attrs
 use Eval::Reversible;
-use List::Util        1.33 (qw( uniq any all ));  # has any/all/etc.
+use List::Util        1.44 (qw( uniq any all ));  # 1.44 has uniq
 use Sub::Util               qw( subname set_subname );
 use Term::ProgressBar 2.14;   # with silent option
 
