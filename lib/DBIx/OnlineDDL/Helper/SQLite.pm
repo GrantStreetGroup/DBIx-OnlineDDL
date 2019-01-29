@@ -23,7 +23,7 @@ DBIx::OnlineDDL::Helper::SQLite - Private OnlineDDL helper for SQLite-specific c
 
 =head1 VERSION
 
-version 0.90
+version 0.91
 
 =head1 DESCRIPTION
 

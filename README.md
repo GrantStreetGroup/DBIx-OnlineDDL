@@ -4,7 +4,7 @@ DBIx::OnlineDDL - Run DDL on online databases safely
 
 # VERSION
 
-version 0.90
+version 0.91
 
 # SYNOPSIS
 
@@ -476,7 +476,7 @@ environment-specific quirks, they have the power to do so, too.
 
 # AUTHOR
 
-Grant Street Group &lt;developers@grantstreet.com>
+Grant Street Group <developers@grantstreet.com>
 
 # LICENSE AND COPYRIGHT
 
