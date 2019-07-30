@@ -330,7 +330,7 @@ sub swap_tables {
     @stmts = $helper->remove_fks_from_child_tables_stmts if $helper->child_fks_need_adjusting;
 
 Return a list of statements needed to remove FKs from the child tables.  These will be
-ran through L<DBIx::OnlineDDL/dbh_runner_do>.
+run through L<DBIx::OnlineDDL/dbh_runner_do>.
 
 Only used if L</child_fks_need_adjusting> is true.
 
@@ -365,7 +365,7 @@ sub remove_fks_from_child_tables_stmts {
     @stmts = $helper->rename_fks_back_to_original_stmts if $helper->dbms_uses_global_fk_namespace;
 
 Return a list of statements needed to rename the FKs back to their original names.  These will be
-ran through L<DBIx::OnlineDDL/dbh_runner_do>.
+run through L<DBIx::OnlineDDL/dbh_runner_do>.
 
 Only used if L</dbms_uses_global_fk_namespace> is true.
 
@@ -409,7 +409,7 @@ sub rename_fks_back_to_original_stmts {
     @stmts = $helper->add_fks_back_to_child_tables_stmts if $helper->child_fks_need_adjusting;
 
 Return a list of statements needed to add FKs back to the child tables.  These will be
-ran through L<DBIx::OnlineDDL/dbh_runner_do>.
+run through L<DBIx::OnlineDDL/dbh_runner_do>.
 
 Only used if L</child_fks_need_adjusting> is true.
 
