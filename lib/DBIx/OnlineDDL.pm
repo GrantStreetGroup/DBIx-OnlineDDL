@@ -5,6 +5,7 @@ our $VERSION   = '0.91';
 
 use v5.10;
 use Moo;
+use MooX::StrictConstructor;
 
 use Types::Standard        qw( Str Bool HashRef CodeRef InstanceOf Dict Optional );
 use Types::Common::Numeric qw( PositiveNum PositiveInt );
@@ -17,7 +18,8 @@ use List::Util        1.44 (qw( uniq any all ));  # 1.44 has uniq
 use Sub::Util               qw( subname set_subname );
 use Term::ProgressBar 2.14;   # with silent option
 
-use namespace::clean;  # don't export the above
+# Don't export the above, but don't conflict with StrictConstructor, either
+use namespace::clean -except => [qw< new meta >];
 
 my $DEFAULT_MAX_ATTEMPTS = 20;
 
