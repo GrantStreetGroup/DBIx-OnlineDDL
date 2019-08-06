@@ -1669,7 +1669,7 @@ Grant Street Group <developers@grantstreet.com>
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2018 Grant Street Group
+Copyright 2019 Grant Street Group
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of the the Artistic License (2.0). You may obtain a
