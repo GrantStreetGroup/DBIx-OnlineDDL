@@ -1,7 +1,7 @@
 package DBIx::OnlineDDL::Helper::Base;
 
 our $AUTHORITY = 'cpan:GSG';
-our $VERSION   = '0.91';
+our $VERSION   = '0.92';
 
 use v5.10;
 use Moo;
@@ -21,7 +21,7 @@ DBIx::OnlineDDL::Helper::Base - Private OnlineDDL helper for RDBMS-specific code
 
 =head1 VERSION
 
-version 0.91
+version 0.92
 
 =head1 DESCRIPTION
 
@@ -444,7 +444,7 @@ Grant Street Group <developers@grantstreet.com>
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright 2018 Grant Street Group
+Copyright 2019 Grant Street Group
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of the the Artistic License (2.0). You may obtain a

@@ -1,7 +1,7 @@
 package DBIx::OnlineDDL;
 
 our $AUTHORITY = 'cpan:GSG';
-our $VERSION   = '0.91';
+our $VERSION   = '0.92';
 
 use v5.10;
 use Moo;
@@ -31,7 +31,7 @@ DBIx::OnlineDDL - Run DDL on online databases safely
 
 =head1 VERSION
 
-version 0.91
+version 0.92
 
 =head1 SYNOPSIS
 
