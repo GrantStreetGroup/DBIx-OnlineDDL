@@ -1,6 +1,6 @@
 # NAME
 
-DBIx::OnlineDDL
+DBIx::OnlineDDL - Run DDL on online databases safely
 
 # VERSION
 
@@ -128,14 +128,6 @@ OnlineDDL process is complete.
 
 Don't have foreign key constraints and `gh-ost` is already working for you?  Great!
 Keep using it.
-
-# NAME
-
-DBIx::OnlineDDL - Run DDL on online databases safely
-
-# VERSION
-
-version 0.92
 
 # ATTRIBUTES
 
@@ -459,20 +451,6 @@ Additionally, by making DBIx::OnlineDDL its own Perl module, it's a lot easier t
 Perl-based schema changes along side [DBIx::BatchChunker](https://metacpan.org/pod/DBIx%3A%3ABatchChunker) without having to switch
 between Perl and CLI.  If other people want to subclass this module for their own
 environment-specific quirks, they have the power to do so, too.
-
-# AUTHOR
-
-Grant Street Group <developers@grantstreet.com>
-
-# LICENSE AND COPYRIGHT
-
-Copyright 2019 Grant Street Group
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of the the Artistic License (2.0). You may obtain a
-copy of the full license at:
-
-[http://www.perlfoundation.org/artistic\_license\_2\_0](http://www.perlfoundation.org/artistic_license_2_0)
 
 # AUTHOR
 

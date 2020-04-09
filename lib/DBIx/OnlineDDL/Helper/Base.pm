@@ -1,7 +1,8 @@
 package DBIx::OnlineDDL::Helper::Base;
 
 our $AUTHORITY = 'cpan:GSG';
-our $VERSION   = '0.92';
+# ABSTRACT: Private OnlineDDL helper for RDBMS-specific code
+# VERSION
 
 use v5.10;
 use Moo;
@@ -14,14 +15,6 @@ use Sub::Util qw( set_subname );
 use namespace::clean;  # don't export the above
 
 =encoding utf8
-
-=head1 NAME
-
-DBIx::OnlineDDL::Helper::Base - Private OnlineDDL helper for RDBMS-specific code
-
-=head1 VERSION
-
-version 0.92
 
 =head1 DESCRIPTION
 
@@ -437,21 +430,5 @@ sub add_fks_back_to_child_tables_stmts {
 
     return @stmts;
 }
-
-=head1 AUTHOR
-
-Grant Street Group <developers@grantstreet.com>
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2019 Grant Street Group
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of the the Artistic License (2.0). You may obtain a
-copy of the full license at:
-
-L<http://www.perlfoundation.org/artistic_license_2_0>
-
-=cut
 
 1;
