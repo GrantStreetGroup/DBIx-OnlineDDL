@@ -1,7 +1,8 @@
 package DBIx::OnlineDDL;
 
 our $AUTHORITY = 'cpan:GSG';
-our $VERSION   = '0.92';
+# ABSTRACT: Run DDL on online databases safely
+# VERSION
 
 use v5.10;
 use Moo;
@@ -24,14 +25,6 @@ use namespace::clean -except => [qw< new meta >];
 my $DEFAULT_MAX_ATTEMPTS = 20;
 
 =encoding utf8
-
-=head1 NAME
-
-DBIx::OnlineDDL - Run DDL on online databases safely
-
-=head1 VERSION
-
-version 0.92
 
 =head1 SYNOPSIS
 
@@ -1662,20 +1655,6 @@ Additionally, by making DBIx::OnlineDDL its own Perl module, it's a lot easier t
 Perl-based schema changes along side L<DBIx::BatchChunker> without having to switch
 between Perl and CLI.  If other people want to subclass this module for their own
 environment-specific quirks, they have the power to do so, too.
-
-=head1 AUTHOR
-
-Grant Street Group <developers@grantstreet.com>
-
-=head1 LICENSE AND COPYRIGHT
-
-Copyright 2019 Grant Street Group
-
-This program is free software; you can redistribute it and/or modify it
-under the terms of the the Artistic License (2.0). You may obtain a
-copy of the full license at:
-
-L<http://www.perlfoundation.org/artistic_license_2_0>
 
 =cut
 

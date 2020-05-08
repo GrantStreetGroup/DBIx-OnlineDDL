@@ -4,77 +4,75 @@ DBIx::OnlineDDL - Run DDL on online databases safely
 
 # VERSION
 
-version 0.92
+version v0.920.1
 
 # SYNOPSIS
 
-```perl
-use DBIx::OnlineDDL;
-use DBIx::BatchChunker;
+    use DBIx::OnlineDDL;
+    use DBIx::BatchChunker;
 
-DBIx::OnlineDDL->construct_and_execute(
-    rsrc          => $dbic_schema->source('Account'),
-    ### OR ###
-    dbi_connector => $dbix_connector_retry_object,
-    table_name    => 'accounts',
+    DBIx::OnlineDDL->construct_and_execute(
+        rsrc          => $dbic_schema->source('Account'),
+        ### OR ###
+        dbi_connector => $dbix_connector_retry_object,
+        table_name    => 'accounts',
 
-    coderef_hooks => {
-        # This is the phase where the DDL is actually run
-        before_triggers => \&drop_foobar,
+        coderef_hooks => {
+            # This is the phase where the DDL is actually run
+            before_triggers => \&drop_foobar,
 
-        # Run other operations right before the swap
-        before_swap => \&delete_deprecated_accounts,
-    },
+            # Run other operations right before the swap
+            before_swap => \&delete_deprecated_accounts,
+        },
 
-    process_name => 'Dropping foobar from accounts',
+        process_name => 'Dropping foobar from accounts',
 
-    copy_opts => {
-        chunk_size => 5000,
-        debug => 1,
-    },
-);
-
-sub drop_foobar {
-    my $oddl  = shift;
-    my $name  = $oddl->new_table_name;
-    my $qname = $oddl->dbh->quote_identifier($name);
-
-    # Drop the 'foobar' column, since it is no longer used
-    $oddl->dbh_runner_do("ALTER TABLE $qname DROP COLUMN foobar");
-}
-
-sub delete_deprecated_accounts {
-    my $oddl = shift;
-    my $name = $oddl->new_table_name;
-    my $dbh  = $oddl->dbh;  # only use for quoting!
-
-    my $qname = $dbh->quote_identifier($name);
-
-    DBIx::BatchChunker->construct_and_execute(
-        chunk_size  => 5000,
-
-        debug => 1,
-
-        process_name     => 'Deleting deprecated accounts',
-        process_past_max => 1,
-
-        dbic_storage => $oddl->rsrc->storage,
-        min_stmt => "SELECT MIN(account_id) FROM $qname",
-        max_stmt => "SELECT MAX(account_id) FROM $qname",
-        stmt     => join("\n",
-            "DELETE FROM $qname",
-            "WHERE",
-            "    account_type = ".$dbh->quote('deprecated')." AND",
-            "    account_id BETWEEN ? AND ?",
-        ),
+        copy_opts => {
+            chunk_size => 5000,
+            debug => 1,
+        },
     );
-}
-```
+
+    sub drop_foobar {
+        my $oddl  = shift;
+        my $name  = $oddl->new_table_name;
+        my $qname = $oddl->dbh->quote_identifier($name);
+
+        # Drop the 'foobar' column, since it is no longer used
+        $oddl->dbh_runner_do("ALTER TABLE $qname DROP COLUMN foobar");
+    }
+
+    sub delete_deprecated_accounts {
+        my $oddl = shift;
+        my $name = $oddl->new_table_name;
+        my $dbh  = $oddl->dbh;  # only use for quoting!
+
+        my $qname = $dbh->quote_identifier($name);
+
+        DBIx::BatchChunker->construct_and_execute(
+            chunk_size  => 5000,
+
+            debug => 1,
+
+            process_name     => 'Deleting deprecated accounts',
+            process_past_max => 1,
+
+            dbic_storage => $oddl->rsrc->storage,
+            min_stmt => "SELECT MIN(account_id) FROM $qname",
+            max_stmt => "SELECT MAX(account_id) FROM $qname",
+            stmt     => join("\n",
+                "DELETE FROM $qname",
+                "WHERE",
+                "    account_type = ".$dbh->quote('deprecated')." AND",
+                "    account_id BETWEEN ? AND ?",
+            ),
+        );
+    }
 
 # DESCRIPTION
 
 This is a database utility class for running DDL operations (like `ALTER TABLE`) safely
-on large tables.  It has a similar scope as [DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker), but is designed for
+on large tables.  It has a similar scope as [DBIx::BatchChunker](https://metacpan.org/pod/DBIx%3A%3ABatchChunker), but is designed for
 DDL, rather than DML.  It also has a similar function to other utilities like
 [pt-online-schema-change](https://www.percona.com/doc/percona-toolkit/LATEST/pt-online-schema-change.html) or
 [gh-ost](https://github.com/github/gh-ost), but actually works properly with foreign
@@ -85,13 +83,13 @@ just like the old table, running the DDL changes (through the ["before\_triggers
 copying data to the new table, and swapping the tables.  Triggers are created to keep the
 data in sync.  See ["STEP METHODS"](#step-methods) for more information.
 
-The full operation is protected with an [undo stack](#reversible) via [Eval::Reversible](https://metacpan.org/pod/Eval::Reversible).
+The full operation is protected with an [undo stack](#reversible) via [Eval::Reversible](https://metacpan.org/pod/Eval%3A%3AReversible).
 If any step in the process fails, the undo stack is run to return the DB back to normal.
 
 This module uses as many of the DBI info methods as possible, along with ANSI SQL in most
 places, to be compatible with multiple RDBMS.  So far, it will work with MySQL or SQLite,
 but can be expanded to include more systems with a relatively small amount of code
-changes.  (See [DBIx::OnlineDDL::Helper::Base](https://metacpan.org/pod/DBIx::OnlineDDL::Helper::Base) for details.)
+changes.  (See [DBIx::OnlineDDL::Helper::Base](https://metacpan.org/pod/DBIx%3A%3AOnlineDDL%3A%3AHelper%3A%3ABase) for details.)
 
 **DISCLAIMER:** You should not rely on this class to magically fix any and all locking
 problems the DB might experience just because it's being used.  Thorough testing and
@@ -121,7 +119,7 @@ around, wasting time with full table copies, etc.  It's not worth the time spent
 
 ### When you actually want to run DML, not DDL
 
-[DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker) is more appropriate for running DML operations (like `INSERT`,
+[DBIx::BatchChunker](https://metacpan.org/pod/DBIx%3A%3ABatchChunker) is more appropriate for running DML operations (like `INSERT`,
 `UPDATE`, `DELETE`).  If you need to do both, you can use the ["before\_triggers"](#before_triggers) hook
 for DDL, and the ["before\_swap"](#before_swap) hook for DML.  Or just run DBIx::BatchChunker after the
 OnlineDDL process is complete.
@@ -137,7 +135,7 @@ Keep using it.
 
 ### rsrc
 
-A [DBIx::Class::ResultSource](https://metacpan.org/pod/DBIx::Class::ResultSource).  This will be the source used for all operations, DDL or
+A [DBIx::Class::ResultSource](https://metacpan.org/pod/DBIx%3A%3AClass%3A%3AResultSource).  This will be the source used for all operations, DDL or
 otherwise.  Optional, but recommended for DBIC users.
 
 The DBIC storage handler's `connect_info` will be tweaked to ensure sane defaults and
@@ -153,7 +151,7 @@ times to retry.  The default `max_attempts` is 20.
 
 ### dbi\_connector
 
-A [DBIx::Connector::Retry](https://metacpan.org/pod/DBIx::Connector::Retry) object.  Instead of [DBI](https://metacpan.org/pod/DBI) statement handles, this is the
+A [DBIx::Connector::Retry](https://metacpan.org/pod/DBIx%3A%3AConnector%3A%3ARetry) object.  Instead of [DBI](https://metacpan.org/pod/DBI) statement handles, this is the
 recommended non-DBIC way for OnlineDDL (and BatchChunker) to interface with the DBI, as
 it handles retries on failures.  The connection mode used is whatever default is set
 within the object.
@@ -183,10 +181,10 @@ needs it.
 ### progress\_bar
 
 The progress bar used for most of the process.  A different one is used for the actual
-table copy with [DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker), since that step takes longer.
+table copy with [DBIx::BatchChunker](https://metacpan.org/pod/DBIx%3A%3ABatchChunker), since that step takes longer.
 
 Optional.  If the progress bar isn't specified, a default one will be created.  If the
-terminal isn't interactive, the default [Term::ProgressBar](https://metacpan.org/pod/Term::ProgressBar) will be set to `silent` to
+terminal isn't interactive, the default [Term::ProgressBar](https://metacpan.org/pod/Term%3A%3AProgressBar) will be set to `silent` to
 naturally skip the output.
 
 ### progress\_name
@@ -219,61 +217,55 @@ issue if you can think of one.
 This is called before the table triggers are applied.  Your DDL should take place here,
 for a few reasons:
 
-```
-1. The table is empty, so DDL should take no time at all now.
+    1. The table is empty, so DDL should take no time at all now.
 
-2. After this hook, the table is reanalyzed to make sure it has an accurate picture
-of the new columns.  This is critical for the creation of the triggers.
-```
+    2. After this hook, the table is reanalyzed to make sure it has an accurate picture
+    of the new columns.  This is critical for the creation of the triggers.
 
 #### before\_swap
 
 This is called after the new table has been analyzed, but before the big table swap.  This
 hook might be used if a large DML operation needs to be done while the new table is still
 available.  If you use this hook, it's highly recommended that you use something like
-[DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker) to make sure the changes are made in a safe and batched manner.
+[DBIx::BatchChunker](https://metacpan.org/pod/DBIx%3A%3ABatchChunker) to make sure the changes are made in a safe and batched manner.
 
 ### copy\_opts
 
-A hashref of different options to pass to [DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker), which is used in the
+A hashref of different options to pass to [DBIx::BatchChunker](https://metacpan.org/pod/DBIx%3A%3ABatchChunker), which is used in the
 ["copy\_rows"](#copy_rows) step.  Some of these are defined automatically.  It's recommended that you
 specify at least these options:
 
-```perl
-chunk_size  => 5000,     # or whatever is a reasonable size for that table
-id_name     => 'pk_id',  # especially if there isn't an obvious integer PK
-```
+    chunk_size  => 5000,     # or whatever is a reasonable size for that table
+    id_name     => 'pk_id',  # especially if there isn't an obvious integer PK
 
-Specifying ["coderef" in DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker#coderef) is not recommended, since Active DBI Processing
+Specifying ["coderef" in DBIx::BatchChunker](https://metacpan.org/pod/DBIx%3A%3ABatchChunker#coderef) is not recommended, since Active DBI Processing
 mode will be used.
 
 These options will be included into the hashref, unless specifically overridden by key
 name:
 
-```perl
-id_name      => $first_pk_column,  # will warn if the PK is multi-column
-target_time  => 1,
-sleep        => 0.5,
+    id_name      => $first_pk_column,  # will warn if the PK is multi-column
+    target_time  => 1,
+    sleep        => 0.5,
 
-# If using DBIC
-dbic_storage => $rsrc->storage,
-rsc          => $id_rsc,
-dbic_retry_opts => {
-    max_attempts  => 20,
-    # best not to change this, unless you know what you're doing
-    retry_handler => $onlineddl_retry_handler,
-},
+    # If using DBIC
+    dbic_storage => $rsrc->storage,
+    rsc          => $id_rsc,
+    dbic_retry_opts => {
+        max_attempts  => 20,
+        # best not to change this, unless you know what you're doing
+        retry_handler => $onlineddl_retry_handler,
+    },
 
-# If using DBI
-dbi_connector => $oddl->dbi_connector,
-min_stmt      => $min_sql,
-max_stmt      => $max_sql,
+    # If using DBI
+    dbi_connector => $oddl->dbi_connector,
+    min_stmt      => $min_sql,
+    max_stmt      => $max_sql,
 
-# For both
-count_stmt    => $count_sql,
-stmt          => $insert_select_sql,
-progress_name => $copying_msg,
-```
+    # For both
+    count_stmt    => $count_sql,
+    stmt          => $insert_select_sql,
+    progress_name => $copying_msg,
 
 ### db\_timeouts
 
@@ -315,7 +307,7 @@ Default value is 28,800 seconds (8 hours), which is MySQL's default.
 
 ### reversible
 
-A [Eval::Reversible](https://metacpan.org/pod/Eval::Reversible) object, used for rollbacks.  A default will be created, if not
+A [Eval::Reversible](https://metacpan.org/pod/Eval%3A%3AReversible) object, used for rollbacks.  A default will be created, if not
 specified.
 
 # CONSTRUCTORS
@@ -324,9 +316,7 @@ See ["ATTRIBUTES"](#attributes) for information on what can be passed into these
 
 ## new
 
-```perl
-my $online_ddl = DBIx::OnlineDDL->new(...);
-```
+    my $online_ddl = DBIx::OnlineDDL->new(...);
 
 A standard object constructor. If you use this constructor, you will need to manually
 call ["execute"](#execute) to execute the DB changes.
@@ -335,9 +325,7 @@ You'll probably just want to use ["construct\_and\_execute"](#construct_and_exec
 
 ## construct\_and\_execute
 
-```perl
-my $online_ddl = DBIx::OnlineDDL->construct_and_execute(...);
-```
+    my $online_ddl = DBIx::OnlineDDL->construct_and_execute(...);
 
 Constructs a DBIx::OnlineDDL object and automatically calls each method step, including
 hooks.  Anything passed to this method will be passed through to the constructor.
@@ -357,9 +345,7 @@ protection, in case of exceptions.
 
 ### fire\_hook
 
-```
-$online_ddl->fire_hook('before_triggers');
-```
+    $online_ddl->fire_hook('before_triggers');
 
 Fires one of the coderef hooks, if it exists.  This also updates the progress bar.
 
@@ -369,9 +355,7 @@ See ["coderef\_hooks"](#coderef_hooks) for more details.
 
 ### dbh
 
-```
-$online_ddl->dbh;
-```
+    $online_ddl->dbh;
 
 Acquires a database handle, either from ["rsrc"](#rsrc) or ["dbi\_connector"](#dbi_connector).  Not recommended
 for active work, as it doesn't offer retry protection.  Instead, use ["dbh\_runner"](#dbh_runner) or
@@ -379,15 +363,13 @@ for active work, as it doesn't offer retry protection.  Instead, use ["dbh\_runn
 
 ### dbh\_runner
 
-```perl
-my @items = $online_ddl->dbh_runner(run => sub {
-    my $dbh = $_;  # or $_[0]
-    $dbh->selectall_array(...);
-});
-```
+    my @items = $online_ddl->dbh_runner(run => sub {
+        my $dbh = $_;  # or $_[0]
+        $dbh->selectall_array(...);
+    });
 
 Runs the `$coderef`, locally setting `$_` to and passing in the database handle.  This
-is essentially a shortcut interface into either [dbi\_connector](https://metacpan.org/pod/dbi_connector) or DBIC's [BlockRunner](https://metacpan.org/pod/DBIx::Class::Storage::BlockRunner).
+is essentially a shortcut interface into either [dbi\_connector](https://metacpan.org/pod/dbi_connector) or DBIC's [BlockRunner](https://metacpan.org/pod/DBIx%3A%3AClass%3A%3AStorage%3A%3ABlockRunner).
 
 The first argument can either be `run` or `txn`, which controls whether to wrap the
 code in a DB transaction or not.  The return is passed directly back, and return context
@@ -395,12 +377,10 @@ is honored.
 
 ### dbh\_runner\_do
 
-```
-$online_ddl->dbh_runner_do(
-    "ALTER TABLE $table_name ADD COLUMN foobar",
-    ["ALTER TABLE ? DROP COLUMN ?", undef, $table_name, 'baz'],
-);
-```
+    $online_ddl->dbh_runner_do(
+        "ALTER TABLE $table_name ADD COLUMN foobar",
+        ["ALTER TABLE ? DROP COLUMN ?", undef, $table_name, 'baz'],
+    );
 
 Runs a list of commands, encapsulating each of them in a ["dbh\_runner"](#dbh_runner) coderef with calls
 to ["do" in DBI](https://metacpan.org/pod/DBI#do).  This is handy when you want to run a list of DDL commands, which you don't
@@ -430,7 +410,7 @@ new table.
 
 ## copy\_rows
 
-Fires up a [DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker) process to copy all of the rows from the old table to
+Fires up a [DBIx::BatchChunker](https://metacpan.org/pod/DBIx%3A%3ABatchChunker) process to copy all of the rows from the old table to
 the new.
 
 ## swap\_tables
@@ -458,19 +438,17 @@ Clean up foreign keys on both the new and child tables.
 The biggest reason is that none of the above fully support foreign key constraints.
 Percona's `pt-osc` comes close, but also includes this paragraph:
 
-```
-Due to a limitation in MySQL, foreign keys will not have the same names after the ALTER
-that they did prior to it. The tool has to rename the foreign key when it redefines it,
-which adds a leading underscore to the name. In some cases, MySQL also automatically
-renames indexes required for the foreign key.
-```
+    Due to a limitation in MySQL, foreign keys will not have the same names after the ALTER
+    that they did prior to it. The tool has to rename the foreign key when it redefines it,
+    which adds a leading underscore to the name. In some cases, MySQL also automatically
+    renames indexes required for the foreign key.
 
 So, tables swapped with `pt-osc` are not exactly what they used to be before the swap.
 It also had a number of other quirks that just didn't work out for us, related to FKs and
 the amount of switches required to make it (semi-)work.
 
 Additionally, by making DBIx::OnlineDDL its own Perl module, it's a lot easier to run
-Perl-based schema changes along side [DBIx::BatchChunker](https://metacpan.org/pod/DBIx::BatchChunker) without having to switch
+Perl-based schema changes along side [DBIx::BatchChunker](https://metacpan.org/pod/DBIx%3A%3ABatchChunker) without having to switch
 between Perl and CLI.  If other people want to subclass this module for their own
 environment-specific quirks, they have the power to do so, too.
 
@@ -478,12 +456,10 @@ environment-specific quirks, they have the power to do so, too.
 
 Grant Street Group <developers@grantstreet.com>
 
-# LICENSE AND COPYRIGHT
+# COPYRIGHT AND LICENSE
 
-Copyright 2019 Grant Street Group
+This software is Copyright (c) 2018 - 2020 by Grant Street Group.
 
-This program is free software; you can redistribute it and/or modify it
-under the terms of the the Artistic License (2.0). You may obtain a
-copy of the full license at:
+This is free software, licensed under:
 
-[http://www.perlfoundation.org/artistic\_license\_2\_0](http://www.perlfoundation.org/artistic_license_2_0)
+    The Artistic License 2.0 (GPL Compatible)
