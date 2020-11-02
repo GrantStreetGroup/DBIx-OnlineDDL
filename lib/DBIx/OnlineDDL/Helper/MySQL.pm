@@ -126,10 +126,13 @@ sub rename_fks_in_table_sql {
     my $dbh = $self->dbh;
 
     # Since MySQL uses a global namespace for foreign keys, these will have to be renamed
-    my $iqre = $dbh->get_info( $GetInfoType{SQL_IDENTIFIER_QUOTE_CHAR} ) || '`';
-    $iqre = quotemeta $iqre;
+    my $iq_chars = $dbh->get_info( $GetInfoType{SQL_IDENTIFIER_QUOTE_CHAR} ) || '`';
+    $iq_chars .= '"';  # include ANSI quotes
 
-    my @fk_names = ($table_sql =~ /CONSTRAINT ${iqre}([^$iqre\s]+)${iqre} FOREIGN KEY/ig);
+    my $iqre     = '['.quotemeta($iq_chars).']';
+    my $noniq_re = '[^'.quotemeta($iq_chars).'\s]';
+
+    my @fk_names = ($table_sql =~ /CONSTRAINT ${iqre}(${noniq_re}+)${iqre} FOREIGN KEY/ig);
 
     foreach my $fk_name (@fk_names) {
         my $new_fk_name = $self->find_new_identifier(
