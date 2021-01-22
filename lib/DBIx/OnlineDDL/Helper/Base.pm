@@ -318,6 +318,24 @@ sub swap_tables {
     });
 }
 
+=head2 foreign_key_info
+
+    my $sth = $helper->foreign_key_info(
+        $pk_catalog, $pk_schema, $pk_table_name,
+        $fk_catalog, $fk_schema, $fk_table_name
+    );
+
+Returns a statement handle in the same manner as a L<DBI/foreign_key_info> call.  In the
+default case, this is just that call, but certain implementations may need it to be
+overloaded or overridden.
+
+=cut
+
+sub foreign_key_info {
+    my $self = shift;
+    return $self->dbh->foreign_key_info(@_);
+}
+
 =head2 remove_fks_from_child_tables_stmts
 
     @stmts = $helper->remove_fks_from_child_tables_stmts if $helper->child_fks_need_adjusting;
