@@ -12,7 +12,8 @@ extends 'DBIx::OnlineDDL::Helper::Base';
 use Types::Standard qw( InstanceOf );
 
 use DBI::Const::GetInfoType;
-use Sub::Util qw( set_subname );
+use List::Util qw( first );
+use Sub::Util  qw( set_subname );
 
 use namespace::clean;  # don't export the above
 
@@ -301,5 +302,98 @@ around 'rename_fks_back_to_original_stmts' => sub {
 };
 
 # Keep Base->add_fks_back_to_child_tables_stmts (no DROPs on those)
+
+# Look for default FK-created indexes that get mysteriously renamed after the FKs are
+# recreated. (SM-3039)
+sub post_fk_add_cleanup_stmts {
+    my $self     = shift;
+    my $dbh      = $self->dbh;
+    my $vars     = $self->vars;
+    my $catalog  = $vars->{catalog};
+    my $schema   = $vars->{schema};
+    my $idx_hash = $vars->{indexes}{definitions};
+
+    my ($mmver) = ($dbh->get_info($GetInfoType{SQL_DBMS_VER}) =~ /(\d+\.\d+)/);
+
+    my @stmts;
+    foreach my $table_name (sort keys %$idx_hash) {
+        my %old_idx_data = %{ $idx_hash->{$table_name} };
+        my %new_idx_data = %{ $self->get_idx_hash($table_name) };
+
+        foreach my $index_name (sort keys %old_idx_data) {
+            next if $index_name eq 'PRIMARY';
+
+            my $old_idx = $old_idx_data{$index_name};
+            my $new_idx = $new_idx_data{$index_name};
+            my $old_col_str = join ', ', @{$old_idx->{columns}};
+
+            next if $new_idx &&
+                $old_col_str eq join(', ', @{$new_idx->{columns}}) &&
+                $old_idx->{unique} == $new_idx->{unique}
+            ;
+
+            # It failed one of the other checks?
+            if ($new_idx) {
+                my $conditional =
+                    $old_idx->{unique} != $new_idx->{unique} ?
+                    ($new_idx->{unique} ? "it is now UNIQUE" : "it is no longer UNIQUE") :
+                    "its columns have changed (".join(', ', @{$new_idx->{columns}}).")"
+                ;
+
+                $self->progress->message( join "\n",
+                    '',
+                    "WARNING: Found index $table_name.$index_name ($old_col_str), but $conditional!",
+                    "Please double-check that the indexes on the table are what you expect!",
+                    '',
+                );
+                next;
+            }
+
+            # It looks like we have a mismatch at this point.  Try to find the renamed index.
+            $new_idx = first {
+                $_->{name} ne 'PRIMARY' &&
+                $old_col_str eq join(', ', @{$_->{columns}}) &&
+                $old_idx->{unique} == $_->{unique}
+            } values %new_idx_data;
+
+            # It disappeared?
+            unless ($new_idx) {
+                $self->progress->message( join "\n",
+                    '',
+                    "WARNING: Found index $table_name.$index_name ($old_col_str), which may have been renamed, but a matching index cannot be found!",
+                    "Please double-check that the indexes on the table are what you expect!",
+                    '',
+                );
+                next;
+            }
+
+            my $new_index_name = $new_idx->{name};
+
+            # We can only rename in MySQL 5.7
+            if ($mmver < 5.7) {
+                $self->progress->message( join "\n",
+                    '',
+                    "WARNING: Found index $table_name.$index_name ($old_col_str), which was renamed to $new_index_name!",
+                    "The index cannot safely renamed in MySQL $mmver, so you may need to DROP/ADD this",
+                    "index a different way to correct the problem.",
+                    '',
+                );
+                next;
+            }
+
+            # Finally, add a RENAME INDEX statement
+            push @stmts, join(' ',
+                "ALTER TABLE",
+                $dbh->quote_identifier( $table_name ),
+                "RENAME INDEX",
+                $dbh->quote_identifier( $new_index_name ),
+                "TO",
+                $dbh->quote_identifier( $index_name ),
+            );
+        }
+    }
+
+    return @stmts;
+}
 
 1;

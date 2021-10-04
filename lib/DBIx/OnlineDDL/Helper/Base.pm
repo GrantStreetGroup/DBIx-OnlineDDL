@@ -51,6 +51,7 @@ has online_ddl => (
         dbh_runner          => 'dbh_runner',
         dbh_runner_do       => 'dbh_runner_do',
         find_new_identifier => '_find_new_identifier',
+        get_idx_hash        => '_get_idx_hash',
         fk_to_sql           => '_fk_to_sql',
     },
 );
@@ -448,5 +449,18 @@ sub add_fks_back_to_child_tables_stmts {
 
     return @stmts;
 }
+
+=head2 post_fk_add_cleanup_stmts
+
+    @stmts = $helper->post_fk_add_cleanup_stmts if $helper->child_fks_need_adjusting;
+
+Return a list of clean up statements to run after the FKs are re-added back to the child
+tables.  These will be run through L<DBIx::OnlineDDL/dbh_runner_do>.
+
+Only used if L</child_fks_need_adjusting> is true.  The base method does nothing.
+
+=cut
+
+sub post_fk_add_cleanup_stmts { return () }
 
 1;
