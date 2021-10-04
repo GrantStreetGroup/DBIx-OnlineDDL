@@ -6,8 +6,6 @@ use warnings;
 
 use Test::OnlineDDL;
 
-use DBI::Const::GetInfoType;
-
 ############################################################
 
 my $CHUNK_SIZE = $CDTEST_MASS_POPULATE ? 5000 : 3;
@@ -19,7 +17,6 @@ onlineddl_test 'No-op copy' => 'Track' => sub {
     my $cd_schema  = shift;
     my $track_rsrc = $cd_schema->source('Track');
     my $dbh        = $cd_schema->storage->dbh;
-    my ($mmver)    = ($dbh->get_info($GetInfoType{SQL_DBMS_VER}) =~ /(\d+\.\d+)/);
 
     # Constructor
     my $online_ddl = DBIx::OnlineDDL->new(
@@ -35,6 +32,7 @@ onlineddl_test 'No-op copy' => 'Track' => sub {
     is $online_ddl->new_table_name, '_track_new', 'Figured out new_table_name';
 
     my $helper = $online_ddl->_helper;
+    my $mmver  = $helper->mmver;
 
     my $orig_table_track_sql  = $helper->create_table_sql('track');
     my $orig_table_lyrics_sql = $helper->create_table_sql('lyrics');  # has FK pointing to track
@@ -54,7 +52,7 @@ onlineddl_test 'No-op copy' => 'Track' => sub {
 
     is $new_table_track_sql,  $orig_table_track_sql,  'New table SQL for `track` matches the old one';
     SKIP: {
-        skip "MySQL versions below 5.7 cannot fix the index problem", 1 if $dbms_name eq 'MySQL' && $mmver < 5.7;
+        skip "MySQL versions below 5.7 cannot fix the index problem", 1 if $dbms_name eq 'MySQL' && $mmver < 5.007;
         is $new_table_lyrics_sql, $orig_table_lyrics_sql, 'New table SQL for `lyrics` matches the old one';
     };
 };

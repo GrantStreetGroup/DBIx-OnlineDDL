@@ -11,7 +11,6 @@ extends 'DBIx::OnlineDDL::Helper::Base';
 
 use Types::Standard qw( InstanceOf );
 
-use DBI::Const::GetInfoType;
 use Sub::Util qw( set_subname );
 
 use namespace::clean;  # don't export the above
@@ -82,9 +81,7 @@ sub post_connection_stmts {
     # Also, while this change was introduced in 3.25.0, it seems to only manifest itself
     # when the driver reports version 3.26.0, possibly due to how their production
     # releases work.
-    no warnings 'numeric';
-    my $db_ver = $self->dbh->get_info( $GetInfoType{SQL_DBMS_VER} ) || 0;
-    push @stmts, 'PRAGMA legacy_alter_table = ON' if $db_ver+0 >= 3.26;
+    push @stmts, 'PRAGMA legacy_alter_table = ON' if $self->mmver >= 3.026;
 
     return @stmts;
 }

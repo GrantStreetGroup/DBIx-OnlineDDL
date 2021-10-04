@@ -208,17 +208,17 @@ sub swap_tables {
 ### of databases/table/column combos.  Furthermore, the kludgy join to TABLE_CONSTRAINTS
 ### is entirely unnecessary.  See also: https://github.com/perl5-dbi/DBD-mysql/issues/326
 sub foreign_key_info {
-    my $self   = shift;
-    my $dbh    = $self->dbh;
-    my ($mver) = ($dbh->get_info($GetInfoType{SQL_DBMS_VER}) =~ /(\d+)\./);
+    my $self  = shift;
+    my $dbh   = $self->dbh;
+    my $mmver = $self->mmver;
 
     # MySQL 8's information_schema implementation isn't a complete dumpster fire of
     # in-memory jank, and totes won't send your precious DB server into a horrible
     # OOM death.  So, skip this noise in that case.
     #
     # More info: https://mysqlserverteam.com/mysql-8-0-improvements-to-information_schema/
-    return $dbh->foreign_key_info(@_) if $mver >= 8;
-    return if $mver < 5;  # not supported by OnlineDDL, anyway
+    return $dbh->foreign_key_info(@_) if $mmver >= 8;
+    return if $mmver < 5;  # not supported by OnlineDDL, anyway
 
     my (
         $pk_catalog, $pk_schema, $pk_table,
@@ -308,12 +308,11 @@ around 'rename_fks_back_to_original_stmts' => sub {
 sub post_fk_add_cleanup_stmts {
     my $self     = shift;
     my $dbh      = $self->dbh;
+    my $mmver    = $self->mmver;
     my $vars     = $self->vars;
     my $catalog  = $vars->{catalog};
     my $schema   = $vars->{schema};
     my $idx_hash = $vars->{indexes}{definitions};
-
-    my ($mmver) = ($dbh->get_info($GetInfoType{SQL_DBMS_VER}) =~ /(\d+\.\d+)/);
 
     my @stmts;
     foreach my $table_name (sort keys %$idx_hash) {
@@ -370,7 +369,7 @@ sub post_fk_add_cleanup_stmts {
             my $new_index_name = $new_idx->{name};
 
             # We can only rename in MySQL 5.7
-            if ($mmver < 5.7) {
+            if ($mmver < 5.007) {
                 $self->progress->message( join "\n",
                     '',
                     "WARNING: Found index $table_name.$index_name ($old_col_str), which was renamed to $new_index_name!",
