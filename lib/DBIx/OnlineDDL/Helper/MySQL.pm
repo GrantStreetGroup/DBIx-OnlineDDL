@@ -175,8 +175,11 @@ sub has_conflicting_triggers_on_table {
     else {
         return $self->dbh_runner(run => set_subname '_has_onlineddl_triggers_on_table', sub {
             $_->selectrow_array(
-                'SELECT trigger_name FROM information_schema.triggers WHERE trigger_schema = DATABASE() AND trigger_name LIKE ?',
-                undef, "\%${table_name}\\_onlineddl\\_\%"
+                'SELECT trigger_name FROM information_schema.triggers WHERE '.join(' AND ',
+                    'event_object_schema = DATABASE()',
+                    'event_object_table = ?',
+                    'trigger_name LIKE ?',
+                ), undef, $table_name, "\%${table_name}\\_onlineddl\\_\%"
             );
         });
     }
@@ -188,7 +191,7 @@ sub find_new_trigger_identifier {
     return $self->find_new_identifier(
         $trigger_name => sub {
             $_[0]->selectrow_array(
-                'SELECT trigger_name FROM information_schema.triggers WHERE trigger_schema = DATABASE() AND trigger_name = ?',
+                'SELECT trigger_name FROM information_schema.triggers WHERE event_object_schema = DATABASE() AND trigger_name = ?',
                 undef, $_[1]
             );
         },
