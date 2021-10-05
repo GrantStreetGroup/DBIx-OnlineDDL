@@ -117,7 +117,7 @@ sub create_table_sql {
 
 # Keep Base->rename_fks_in_table_sql (not used)
 
-sub has_triggers_on_table {
+sub has_conflicting_triggers_on_table {
     my ($self, $table_name) = @_;
 
     return $self->dbh_runner(run => set_subname '_has_triggers_on_table', sub {

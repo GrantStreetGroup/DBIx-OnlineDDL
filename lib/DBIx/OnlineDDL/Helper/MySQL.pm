@@ -157,15 +157,29 @@ sub rename_fks_in_table_sql {
     return $table_sql;
 }
 
-sub has_triggers_on_table {
+sub has_conflicting_triggers_on_table {
     my ($self, $table_name) = @_;
+    my $mmver = $self->mmver;
 
-    return $self->dbh_runner(run => set_subname '_has_triggers_on_table', sub {
-        $_->selectrow_array(
-            'SELECT trigger_name FROM information_schema.triggers WHERE event_object_schema = DATABASE() AND event_object_table = ?',
-            undef, $table_name
-        );
-    });
+    # Multiple triggers aren't allowed in MySQL 5.6
+    if ($mmver < 5.007) {
+        return $self->dbh_runner(run => set_subname '_has_triggers_on_table', sub {
+            $_->selectrow_array(
+                'SELECT trigger_name FROM information_schema.triggers WHERE event_object_schema = DATABASE() AND event_object_table = ?',
+                undef, $table_name
+            );
+        });
+    }
+    # MySQL 5.7+ allows them, so look for anything that looks like a leftover OnlineDDL
+    # trigger name.
+    else {
+        return $self->dbh_runner(run => set_subname '_has_onlineddl_triggers_on_table', sub {
+            $_->selectrow_array(
+                'SELECT trigger_name FROM information_schema.triggers WHERE trigger_schema = DATABASE() AND trigger_name LIKE ?',
+                undef, "\%${table_name}\\_onlineddl\\_\%"
+            );
+        });
+    }
 }
 
 sub find_new_trigger_identifier {

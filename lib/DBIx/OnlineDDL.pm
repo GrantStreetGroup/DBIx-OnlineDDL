@@ -1129,8 +1129,8 @@ sub create_triggers {
 
     ### Check to make sure existing triggers aren't on the table
 
-    die "Found triggers on $orig_table_name!  Please remove them first, so that our INSERT/UPDATE/DELETE triggers can be applied."
-        if $helper->has_triggers_on_table($orig_table_name);
+    die "Found conflicting triggers on $orig_table_name!  Please remove them first, so that our INSERT/UPDATE/DELETE triggers can be applied."
+        if $helper->has_conflicting_triggers_on_table($orig_table_name);
 
     ### Find a good set of trigger names
 
@@ -1299,9 +1299,10 @@ sub swap_tables {
         # use that as reference.  They have *not* been re-created on the child tables, so
         # the original table is used as reference.
         my $fk_hash = $vars->{foreign_keys}{definitions} //= {};
-        $self->dbh_runner(run => set_subname '_fk_info_query', sub {
-            $dbh = $_;
+        $self->dbh_runner(run => set_subname '_fk_parent_info_query', sub {
             $fk_hash->{parent} = $self->_fk_info_to_hash( $helper->foreign_key_info(undef, undef, undef, $catalog, $schema, $new_table_name)  );
+        });
+        $self->dbh_runner(run => set_subname '_fk_child_info_query', sub {
             $fk_hash->{child}  = $self->_fk_info_to_hash( $helper->foreign_key_info($catalog, $schema, $orig_table_name, undef, undef, undef) );
         });
 

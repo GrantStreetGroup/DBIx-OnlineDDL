@@ -239,16 +239,15 @@ sub rename_fks_in_table_sql {
     return $table_sql;
 }
 
-=head2 has_triggers_on_table
+=head2 has_conflicting_triggers_on_table
 
-    die if $helper->has_triggers_on_table($table_name);
+    die if $helper->has_conflicting_triggers_on_table($table_name);
 
-Return true if triggers exist on the given table.  This is a fail-safe to make sure the
-table is trigger-free prior to the operation.
+Return true if triggers exist on the given table that would conflict with the operation.
 
 =cut
 
-sub has_triggers_on_table {
+sub has_conflicting_triggers_on_table {
     die sprintf "Not sure how to check for table triggers for %s systems!", shift->dbms_name;
 }
 
