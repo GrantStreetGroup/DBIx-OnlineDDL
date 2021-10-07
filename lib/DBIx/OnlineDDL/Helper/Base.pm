@@ -11,6 +11,7 @@ use Types::Standard qw( InstanceOf );
 
 use DBI::Const::GetInfoType;
 use Sub::Util qw( set_subname );
+use version 0.77 ();
 
 use namespace::clean;  # don't export the above
 
@@ -95,6 +96,20 @@ less bulky.
 =cut
 
 sub null_safe_equals_op { 'IS NOT DISTINCT FROM' }
+
+=head2 mmver
+
+The major/minor version of the currently connected server, converted to "numified" form
+via L<version>, after parsing out the dotted notation (ie: C<5.7.33> instead of
+C<5.7.33-36-log>). This allows for version comparisons.
+
+=cut
+
+sub mmver {
+    my $self = shift;
+    my ($mmver) = ($self->dbh->get_info($GetInfoType{SQL_DBMS_VER}) =~ /(\d+\.\d+(?:\.\d+)?)/);
+    return version->parse("v$mmver")->numify;
+}
 
 =head1 PRIVATE HELPER METHODS
 
@@ -224,16 +239,15 @@ sub rename_fks_in_table_sql {
     return $table_sql;
 }
 
-=head2 has_triggers_on_table
+=head2 has_conflicting_triggers_on_table
 
-    die if $helper->has_triggers_on_table($table_name);
+    die if $helper->has_conflicting_triggers_on_table($table_name);
 
-Return true if triggers exist on the given table.  This is a fail-safe to make sure the
-table is trigger-free prior to the operation.
+Return true if triggers exist on the given table that would conflict with the operation.
 
 =cut
 
-sub has_triggers_on_table {
+sub has_conflicting_triggers_on_table {
     die sprintf "Not sure how to check for table triggers for %s systems!", shift->dbms_name;
 }
 
