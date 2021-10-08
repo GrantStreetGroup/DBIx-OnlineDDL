@@ -4,7 +4,7 @@ DBIx::OnlineDDL - Run DDL on online databases safely
 
 # VERSION
 
-version v0.930.1
+version v0.940.0
 
 # SYNOPSIS
 
