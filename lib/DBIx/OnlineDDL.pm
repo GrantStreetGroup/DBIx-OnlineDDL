@@ -4,6 +4,9 @@ our $AUTHORITY = 'cpan:GSG';
 # ABSTRACT: Run DDL on online databases safely
 # VERSION
 
+use utf8;
+use open qw(:utf8 :std);
+
 use v5.10;
 use Moo;
 use MooX::StrictConstructor;
@@ -42,6 +45,7 @@ my $DEFAULT_MAX_ATTEMPTS = 20;
             before_triggers => \&drop_foobar,
 
             # Run other operations right before the swap
+            # WARNING: DML only!  No DDL here!
             before_swap => \&delete_deprecated_accounts,
         },
 
@@ -599,9 +603,27 @@ around BUILDARGS => sub {
         $args{rsrc} || $args{dbi_connector}
     );
 
+    $args{db_timeouts}   //= {};
+    $args{coderef_hooks} //= {};
+    if (ref $args{db_timeouts} ne 'HASH' || ref $args{coderef_hooks} ne 'HASH') {
+        # Let Moo complain about the isa check
+        $class->$next( %args );
+        die "Should have failed an isa check...";
+    }
+
+    unless ($args{coderef_hooks}{before_triggers}) {
+        warn
+            "No before_triggers hook appears to be defined.  There may be a few reasons for this:\n\n".
+
+            "1. Are you running DDL?  If not, this may be the wrong tool for you.\n".
+            "2. Did you add DDL into the wrong coderef hook?  This is widely regarded as a Very Bad Idea™.\n".
+            "3. Are you intending to use this as an OPTIMIZE TABLE or ALTER TABLE FORCE operation?  If so,\n".
+            "   add in an empty coderef for before_triggers to silence this warning.\n"
+        ;
+    }
+
     # Defaults for db_timeouts (see POD above).  We set these here, because each
     # individual timeout should be checked to see if it's defined.
-    $args{db_timeouts} //= {};
     $args{db_timeouts}{lock_file} //= 1;
     $args{db_timeouts}{lock_db}   //= 60;
     $args{db_timeouts}{lock_row}  //= 2;
