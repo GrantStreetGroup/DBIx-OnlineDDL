@@ -4,7 +4,7 @@ DBIx::OnlineDDL - Run DDL on online databases safely
 
 # VERSION
 
-version v0.940.0
+version v1.0.0
 
 # SYNOPSIS
 
@@ -22,6 +22,7 @@ version v0.940.0
             before_triggers => \&drop_foobar,
 
             # Run other operations right before the swap
+            # WARNING: DML only!  No DDL here!
             before_swap => \&delete_deprecated_accounts,
         },
 
@@ -458,7 +459,7 @@ Grant Street Group <developers@grantstreet.com>
 
 # COPYRIGHT AND LICENSE
 
-This software is Copyright (c) 2018 - 2021 by Grant Street Group.
+This software is Copyright (c) 2018 - 2022 by Grant Street Group.
 
 This is free software, licensed under:
 
