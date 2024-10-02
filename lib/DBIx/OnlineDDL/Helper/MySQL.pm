@@ -9,7 +9,7 @@ use Moo;
 
 extends 'DBIx::OnlineDDL::Helper::Base';
 
-use Types::Standard qw( InstanceOf );
+use Types::Standard qw( Bool );
 
 use DBI::Const::GetInfoType;
 use List::Util qw( first );
@@ -41,6 +41,18 @@ sub current_catalog_schema {
     return (undef, $schema);
 }
 
+has is_galera_cluster => (
+    is   => 'lazy',
+    isa  => Bool,
+);
+
+sub _build_is_galera_cluster {
+    my $self = shift;
+
+    my ($name, $val) = $self->dbh->selectrow_array("SHOW GLOBAL STATUS LIKE 'wsrep_cluster_size'");
+    return $val && int($val) && $val > 1;
+}
+
 sub insert_select_stmt {
     my ($self, $column_list_str) = @_;
 
@@ -67,6 +79,10 @@ sub insert_select_stmt {
 
 sub post_connection_stmts {
     my $self = shift;
+
+    # Initialize these cached attributes
+    $self->mmver;
+    $self->is_galera_cluster;
 
     my $db_timeouts = $self->db_timeouts;
     return (
@@ -210,7 +226,22 @@ sub modify_trigger_dml_stmts {
 
 sub swap_tables {
     my ($self, $new_table_name, $orig_table_name, $old_table_name) = @_;
-    my $dbh = $self->dbh;
+    my $dbh   = $self->dbh;
+    my $mmver = $self->mmver;
+
+    # Galera MySQL 8 has the potential to enter a bad MDL BF-BF conflict state, if the
+    # cluster is under enough load to make synchronous replication fall a bit behind and
+    # a RENAME TABLE statement is ran.  This workaround makes a broad assumption that the
+    # bug is some sort of race condition between the statements that make updates to the
+    # table, and the RENAME TABLE statement.  Thus, we give replication a chance to catch
+    # up first before we execute the RENAME TABLE statement.
+    #
+    # More info: https://perconadev.atlassian.net/browse/PXC-4512
+
+    if ($mmver >= 8 && $self->is_galera_cluster) {
+        $self->progress->message("    Sleeping for 5 seconds");
+        sleep 5;
+    }
 
     my $new_table_name_quote  = $dbh->quote_identifier($new_table_name);
     my $orig_table_name_quote = $dbh->quote_identifier($orig_table_name);

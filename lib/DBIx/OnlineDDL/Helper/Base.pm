@@ -7,7 +7,7 @@ our $AUTHORITY = 'cpan:GSG';
 use v5.10;
 use Moo;
 
-use Types::Standard qw( InstanceOf );
+use Types::Standard qw( InstanceOf Num );
 
 use DBI::Const::GetInfoType;
 use Sub::Util qw( set_subname );
@@ -105,7 +105,12 @@ C<5.7.33-36-log>). This allows for version comparisons.
 
 =cut
 
-sub mmver {
+has mmver => (
+    is  => 'lazy',
+    isa => Num,
+);
+
+sub _build_mmver {
     my $self = shift;
     my ($mmver) = ($self->dbh->get_info($GetInfoType{SQL_DBMS_VER}) =~ /(\d+\.\d+(?:\.\d+)?)/);
     return version->parse("v$mmver")->numify;

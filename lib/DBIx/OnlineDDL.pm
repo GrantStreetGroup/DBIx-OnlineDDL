@@ -1354,7 +1354,6 @@ sub swap_tables {
         'SQL_MAXIMUM_TABLE_NAME_LENGTH',
     );
     my $old_table_name_quote = $dbh->quote_identifier($old_table_name);
-
     $progress->message("Swapping tables ($new_table_name --> $orig_table_name --> $old_table_name)");
 
     # Let's swap tables!
