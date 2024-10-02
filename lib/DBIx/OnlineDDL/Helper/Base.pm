@@ -57,6 +57,10 @@ has online_ddl => (
     },
 );
 
+=for Pod::Coverage dbms_name progress
+
+=cut
+
 # Other "handles"
 sub dbms_name { shift->vars->{dbms_name}    }  # used for die errors only
 sub progress  { shift->vars->{progress_bar} }

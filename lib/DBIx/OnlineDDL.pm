@@ -592,6 +592,10 @@ sub _build_helper {
 
 ### BUILD methods
 
+=for Pod::Coverage BUILDARGS BUILD
+
+=cut
+
 around BUILDARGS => sub {
     my $next  = shift;
     my $class = shift;
