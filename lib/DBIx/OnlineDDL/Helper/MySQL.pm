@@ -237,7 +237,7 @@ sub modify_trigger_dml_stmts {
 
     # Ignore errors
     $stmts->{delete_for_update} =~ s/^DELETE/DELETE IGNORE/;
-    $stmts->{delete_for_update} =~ s/^DELETE/DELETE IGNORE/;
+    $stmts->{delete_for_delete} =~ s/^DELETE/DELETE IGNORE/;
 }
 
 # Keep Base->analyze_table
