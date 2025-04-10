@@ -548,7 +548,7 @@ sub add_fks_back_to_child_tables_stmts {
         # Ignore self-joined FKs
         next if $fk->{fk_table_name} eq $self->table_name || $fk->{fk_table_name} eq $self->new_table_name;
 
-        $self->dbh_runner_do(join ' ',
+        push @stmts, join(' ',
             "ALTER TABLE",
             $dbh->quote_identifier( $fk->{fk_table_name} ),
             "ADD CONSTRAINT",
