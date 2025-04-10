@@ -1,6 +1,7 @@
 requires 'Class::Load';
 requires 'DBI::Const::GetInfoType';
 requires 'DBIx::BatchChunker';
+requires 'DBIx::ParseError::MySQL';
 requires 'Eval::Reversible';
 requires 'List::Util', '1.44';
 requires 'Moo';

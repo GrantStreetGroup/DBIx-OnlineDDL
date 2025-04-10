@@ -12,6 +12,7 @@ extends 'DBIx::OnlineDDL::Helper::Base';
 use Types::Standard qw( Bool );
 
 use DBI::Const::GetInfoType;
+use DBIx::ParseError::MySQL;
 use List::Util qw( first );
 use Sub::Util  qw( set_subname );
 
@@ -103,25 +104,7 @@ sub post_connection_stmts {
 
 sub is_error_retryable {
     my ($self, $error) = @_;
-
-    # Disable /x flag to allow for whitespace within string, but turn it on for newlines
-    # and comments.
-    return $error =~ m<
-        # Locks
-        (?-x:deadlock found)|
-        (?-x:wsrep detected deadlock/conflict)|
-        (?-x:lock wait timeout exceeded)|
-
-        # Connections
-        (?-x:mysql server has gone away)|
-        (?-x:lost connection to mysql server)|
-
-        # Queries
-        (?-x:query execution was interrupted)|
-
-        # Failovers
-        (?-x:wsrep has not yet prepared node for application use)
-    >xi;
+    return DBIx::ParseError::MySQL->new($error)->is_transient;
 }
 
 sub create_table_sql {
