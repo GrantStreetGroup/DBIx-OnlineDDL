@@ -19,7 +19,7 @@ on test => sub {
     requires 'strict';
     requires 'utf8';
 
-    requires 'DBI';
+    requires 'DBI', '1.635';
     requires 'DBIx::Class::Core';
     requires 'DBIx::Class::Schema';
     requires 'Env';

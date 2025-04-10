@@ -201,6 +201,24 @@ sub has_conflicting_triggers_on_table {
     }
 }
 
+sub has_triggers_on_table_to_be_copied {
+    my ($self, $table_name) = @_;
+    my $mmver = $self->mmver;
+    # Multiple triggers aren't allowed on MySQL 5.6, so there's nothing to copy
+    return 0 if $mmver < 5.007;
+
+    # Look for anything that isn't a leftover OnlineDDL trigger name.
+    return $self->dbh_runner(run => set_subname '_has_non_onlineddl_triggers_on_table', sub {
+        $_->selectrow_array(
+            'SELECT trigger_name FROM information_schema.triggers WHERE '.join(' AND ',
+                'event_object_schema = DATABASE()',
+                'event_object_table = ?',
+                'trigger_name NOT LIKE ?',
+            ), undef, $table_name, "\%${table_name}\\_onlineddl\\_\%"
+        );
+    });
+}
+
 sub find_new_trigger_identifier {
     my ($self, $trigger_name) = @_;
 
@@ -250,6 +268,25 @@ sub swap_tables {
     $self->dbh_runner_do(
         "RENAME TABLE $orig_table_name_quote TO $old_table_name_quote, $new_table_name_quote TO $orig_table_name_quote"
     );
+}
+
+sub get_trigger_data {
+    my ($self, $table_name) = @_;
+    my $mmver = $self->mmver;
+    # Multiple triggers aren't allowed on MySQL 5.6, so there's nothing to copy
+    return 0 if $mmver < 5.007;
+
+    # Look for anything that isn't a leftover OnlineDDL trigger name.
+    $self->dbh_runner(run => set_subname '_non_onlineddl_triggers_on_table', sub {
+        $_->{FetchHashKeyName} = 'NAME_lc';
+        $self->vars->{existing_triggers} = $_->selectall_hashref(
+            'SELECT * FROM information_schema.triggers WHERE '.join(' AND ',
+                'event_object_schema = DATABASE()',
+                'event_object_table = ?',
+                'trigger_name NOT LIKE ?',
+            ), 'trigger_name', undef, $table_name, "\%${table_name}\\_onlineddl\\_\%"
+        );
+    });
 }
 
 ### NOTE: The typical SQL in DBD::mysql is badly optimized for MySQL 5 and very large sets

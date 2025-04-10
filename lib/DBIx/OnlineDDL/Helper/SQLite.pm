@@ -128,6 +128,9 @@ sub has_conflicting_triggers_on_table {
     });
 }
 
+# Always zero; multiple triggers per table/type aren't allowed
+sub has_triggers_on_table_to_be_copied { 0 }
+
 sub find_new_trigger_identifier {
     my ($self, $trigger_name) = @_;
 
@@ -150,6 +153,8 @@ sub analyze_table {
 }
 
 # Keep Base->swap_tables (has transactional DDL)
+
+# Keep the trigger methods (not used)
 
 # Keep the other FK methods (not used)
 

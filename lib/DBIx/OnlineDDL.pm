@@ -293,7 +293,7 @@ sub _progress_bar_setup {
     my $self = shift;
     my $vars = $self->_vars;
 
-    my $steps = 6 + scalar keys %{ $self->coderef_hooks };
+    my $steps = 7 + scalar keys %{ $self->coderef_hooks };
 
     my $progress = $self->progress_bar || Term::ProgressBar->new({
         name   => $self->progress_name,
@@ -817,6 +817,7 @@ sub execute {
         $self->swap_tables;
     });
     $reversible->run_reversibly(set_subname '_execute_part_two', sub {
+        $self->readd_triggers;
         $self->drop_old_table;
         $self->cleanup_foreign_keys;
     });
@@ -1153,10 +1154,14 @@ sub create_triggers {
 
     die "Cannot find an appropriate unique index for $orig_table_name!" unless @unique_ids;
 
-    ### Check to make sure existing triggers aren't on the table
+    ### Check to make sure existing (conflicting) triggers aren't on the table
 
     die "Found conflicting triggers on $orig_table_name!  Please remove them first, so that our INSERT/UPDATE/DELETE triggers can be applied."
         if $helper->has_conflicting_triggers_on_table($orig_table_name);
+
+    ### Get any info on existing triggers (to copy later)
+
+    $helper->get_trigger_data($orig_table_name) if $helper->has_triggers_on_table_to_be_copied($orig_table_name);
 
     ### Find a good set of trigger names
 
@@ -1368,6 +1373,50 @@ sub swap_tables {
     # back here would be undesirable.
     $reversible->clear_undo;
     $vars->{new_table_swapped} = 1;
+
+    $progress->update;
+}
+
+=head2 readd_triggers
+
+Re-adds the existing triggers onto the new table.  Since the old table was swapped, and since the
+C<CREATE TABLE> statement wouldn't have included them, any triggers it had will need to be re-added
+to the new table.
+
+Because this operation isn't atomic, there's a small window (between the swap and this operation)
+where triggers won't fire.  You should prepare for potential clean up of rows impacted during this
+window.
+
+This step only applies to RDBMS where multiple triggers are allowed to be applied per table/action
+(so far, MySQL 5.7+), and only if there were existing triggers in the first place.
+
+=cut
+
+sub readd_triggers {
+    my $self = shift;
+    my $dbh  = $self->dbh;
+    my $vars = $self->_vars;
+
+    my $progress   = $vars->{progress_bar};
+    my $reversible = $self->reversible;
+    my $helper     = $self->_helper;
+
+    my $orig_table_name = $self->table_name;
+
+    $reversible->failure_warning( join "\n",
+        '',
+        "The new table has been swapped, but since the process was interrupted, foreign keys and",
+        "triggers will need to be cleaned up, and the old table dropped.",
+        '',
+    );
+
+    if ($vars->{existing_triggers}) {
+        $progress->message("Re-adding triggers to $orig_table_name");
+
+        $self->dbh_runner_do(
+            $helper->add_triggers_back_to_table($orig_table_name)
+        );
+    }
 
     $progress->update;
 }
