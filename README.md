@@ -4,7 +4,7 @@ DBIx::OnlineDDL - Run DDL on online databases safely
 
 # VERSION
 
-version v1.0.1
+version v1.1.0
 
 # SYNOPSIS
 
@@ -418,6 +418,19 @@ the new.
 
 With the new table completely modified and set up, this swaps the old/new tables.
 
+## readd\_triggers
+
+Re-adds the existing triggers onto the new table.  Since the old table was swapped, and since the
+`CREATE TABLE` statement wouldn't have included them, any triggers it had will need to be re-added
+to the new table.
+
+Because this operation isn't atomic, there's a small window (between the swap and this operation)
+where triggers won't fire.  You should prepare for potential clean up of rows impacted during this
+window.
+
+This step only applies to RDBMS where multiple triggers are allowed to be applied per table/action
+(so far, MySQL 5.7+), and only if there were existing triggers in the first place.
+
 ## drop\_old\_table
 
 Drops the old table.  This will also remove old foreign keys on child tables.  (Those FKs
@@ -459,7 +472,7 @@ Grant Street Group <developers@grantstreet.com>
 
 # COPYRIGHT AND LICENSE
 
-This software is Copyright (c) 2018 - 2024 by Grant Street Group.
+This software is Copyright (c) 2018 - 2025 by Grant Street Group.
 
 This is free software, licensed under:
 

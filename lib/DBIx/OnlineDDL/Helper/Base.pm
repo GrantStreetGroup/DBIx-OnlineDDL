@@ -260,6 +260,19 @@ sub has_conflicting_triggers_on_table {
     die sprintf "Not sure how to check for table triggers for %s systems!", shift->dbms_name;
 }
 
+=head2 has_triggers_on_table_to_be_copied
+
+    $helper->has_triggers_on_table_to_be_copied($table_name);
+
+Return true if triggers exist on the given table that won't conflict with the operation,
+but will need to be copied over to the new table.
+
+=cut
+
+sub has_triggers_on_table_to_be_copied {
+    die sprintf "Not sure how to check for table triggers for %s systems!", shift->dbms_name;
+}
+
 =head2 find_new_trigger_identifier
 
     $trigger_name = $helper->find_new_trigger_identifier($trigger_name);
@@ -340,6 +353,79 @@ sub swap_tables {
         $dbh->do("ALTER TABLE $orig_table_name_quote RENAME TO $old_table_name_quote");
         $dbh->do("ALTER TABLE $new_table_name_quote RENAME TO $orig_table_name_quote");
     });
+}
+
+=head2 get_trigger_data
+
+    $helper->get_trigger_data($table_name) if $helper->has_triggers_on_table_to_be_copied($table_name);
+
+Acquires trigger data for the given table and stashes it in C<< $helper->vars >> for
+later use.
+
+=cut
+
+sub get_trigger_data {
+    die sprintf "Not sure how to check for table triggers for %s systems!", shift->dbms_name;
+}
+
+=head2 add_triggers_back_to_table
+
+    @stmts = $helper->add_triggers_back_to_table($orig_table_name) if
+        $helper->has_triggers_on_table_to_be_copied($new_table_name);
+
+Return a list of statements needed to add triggers to the given table.  These will be run through
+L<DBIx::OnlineDDL/dbh_runner_do>.
+
+Only used if L</has_triggers_on_table_to_be_copied> is true.
+
+=cut
+
+sub add_triggers_back_to_table {
+    my ($self, $table_name) = @_;
+    my $dbh = $self->dbh;
+
+    my $triggers = $self->vars->{existing_triggers} // return;
+
+    my $table_name_quote = $dbh->quote_identifier($table_name);
+
+    my @stmts;
+    foreach my $trigger_name (
+        sort {
+            # Sort by: BEFORE/AFTER, INSERT/UPDATE/DELETE, action order (important!), name
+            ( $triggers->{$a}{action_timing}      cmp $triggers->{$b}{action_timing}      ) ||
+            ( $triggers->{$a}{event_manipulation} cmp $triggers->{$b}{event_manipulation} ) ||
+            (($triggers->{$a}{action_order} // 0) <=> ($triggers->{$b}{action_order} // 0)) ||
+            ($a cmp $b)
+        }
+        keys %$triggers
+    ) {
+        my $trigger = $triggers->{$trigger_name};
+
+        my $trigger_name_quote = $dbh->quote_identifier($trigger_name);
+        push @stmts, "DROP TRIGGER IF EXISTS $trigger_name_quote";
+
+        my $sql = 'CREATE ';
+        if ($trigger->{definer}) {
+            my $definer_quote =
+                join '@',
+                map { $dbh->quote_identifier($_) }
+                split(/\@/, $trigger->{definer}, 2)
+            ;
+            $sql .= "DEFINER = $definer_quote ";
+        }
+        $sql .= "TRIGGER $trigger_name_quote ";
+        $sql .= join(' ',
+            $trigger->{action_timing},
+            $trigger->{event_manipulation},
+            'ON', $table_name_quote,
+            'FOR EACH', $trigger->{action_orientation},
+        );
+        $sql .= "\n".$trigger->{action_statement};
+
+        push @stmts, $sql;
+    }
+
+    return @stmts;
 }
 
 =head2 foreign_key_info
@@ -462,7 +548,7 @@ sub add_fks_back_to_child_tables_stmts {
         # Ignore self-joined FKs
         next if $fk->{fk_table_name} eq $self->table_name || $fk->{fk_table_name} eq $self->new_table_name;
 
-        $self->dbh_runner_do(join ' ',
+        push @stmts, join(' ',
             "ALTER TABLE",
             $dbh->quote_identifier( $fk->{fk_table_name} ),
             "ADD CONSTRAINT",
