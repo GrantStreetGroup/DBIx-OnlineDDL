@@ -34,8 +34,10 @@ sub null_safe_equals_op           { 'IS' }
 
 sub current_catalog_schema {
     my $self = shift;
+    my $dbh  = $self->dbh;
 
-    my $databases = $self->dbh->selectall_hashref('PRAGMA database_list', 'seq');
+    local $dbh->{FetchHashKeyName} = 'NAME_lc';
+    my $databases = $dbh->selectall_hashref('PRAGMA database_list', 'seq');
     my $schema = $databases->{0}{name};  # probably 'main'
     return (undef, $schema);
 }
