@@ -1531,20 +1531,32 @@ sub _find_new_identifier {
 
     state $hash_digits = ['a' .. 'z', '0' .. '9'];
 
-    my $hash = join '', map { $hash_digits->[rand @$hash_digits] } 1 .. 10;
+    my $hash    = join '', map { $hash_digits->[rand @$hash_digits] } 1 .. 10;
+    my $max_len = $self->dbh->get_info( $GetInfoType{$length_info_str} ) || 256;
+
+    # Pre-shrink: abbreviate the longest [a-z]+ sections to their first letter until the identifier
+    # fits within the max length
+    while (length($desired_identifier) > $max_len) {
+        my ($best_pos, $best_len) = (-1, 1);
+        while ($desired_identifier =~ /([a-z]{2,})/g) {
+            if (length($1) > $best_len) {
+                $best_len = length($1);
+                $best_pos = $-[1];
+            }
+        }
+        last if $best_pos == -1;
+        substr($desired_identifier, $best_pos + 1, $best_len - 1, '');
+    }
 
     # Test out some potential names
-    my @potential_names = (
-        $desired_identifier, "_${desired_identifier}",
-        "${desired_identifier}_${hash}", "_${desired_identifier}_${hash}",
-        $hash, "_${hash}"
+    my @potential_names = map { $_, "_$_" } (
+        $desired_identifier, "${desired_identifier}_${hash}", $hash,
     );
-
-    my $max_len = $self->dbh->get_info( $GetInfoType{$length_info_str} ) || 256;
 
     my $new_name;
     foreach my $potential_name (@potential_names) {
-        $potential_name = substr($potential_name, 0, $max_len);  # avoid the ID name character limit
+        # avoid the ID name character limit
+        $potential_name = substr($potential_name, -$max_len) if length($potential_name) > $max_len;
 
         my @results = $self->dbh_runner(run => set_subname '_find_new_identifier_dbh_runner', sub {
             $finder_sub->($_, $potential_name);
